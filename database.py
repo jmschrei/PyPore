@@ -183,13 +183,3 @@ def DatabaseFactory( db_type, **kwargs ):
         return TextSpreadsheetInterface( db = db )
     if db_type.lower() == 'mysql':
         return MySQLDatabaseInterface( db = db, user = user, password = password, host = host )
-
-if __name__ == '__main__':
-    GoogleDoc = DatabaseFactory( sheet = 1, title = "Experiments Analyzed", email = "Nanopore.Bot@gmail.com", password = "methylmethylmethyl", source = "Test", key = "0Als4CgceSJModFFLWktoLVhrZ0RaVkh3a0taUnZyOEE", db_type = 'google' )
-    SQLBase = MySQLDatabaseInterface( db = 'chenoo', host = 'db-01.soe.ucsc.edu', password = 'OM0gFZzFzPmc+AuZ', user = 'chenoo' )
-    SQLBase.insert( "NanoporeMetadata", GoogleDoc.read()[ [ 'filename', 'date', 'user', 'station', 'kclm', 'hybrid', 'template', 'primer', 'enzyme', 'abasicidentity', 'singleoligo', 'expbookpage', 'expbooknumber', 'conditions', 'comments' ] ] )
-    print SQLBase.read( "SELECT * FROM NanoporeMetadata")
-
-
-
-#data = DatabaseInterfaceFactory( db = "ACGG-raw.xlsx", db_type="excel" )
