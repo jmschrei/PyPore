@@ -285,6 +285,11 @@ def split_on_neg_dur( segments ):
     if segments[-1][1]>=0: yield segments[start:]
 
 class MultipleEventAlignment( object ):
+    '''
+    This object takes in multiple events, which are made up of segments, and allows for
+    methods that align the data in various ways. The two strategies are one-vs-all, if a model
+    is selected, or all-vs-all with neighbor joining to prune the graph.
+    '''
     def __init__( self, events ):
         self.events = events[:-1]
         self.aligned_events = []
