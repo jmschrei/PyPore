@@ -5,7 +5,6 @@ cimport cython
 from cython.view cimport array as cvarray
 
 cdef inline double double_max( double a, double b ): return a if a >= b else b
-
 cdef inline double double_min( double a, double b ): return a if a <= b else b
 
 cdef inline int double_argmax( double [:] x ):
@@ -98,4 +97,4 @@ cdef class cSegmentAligner:
 					continue
 
 		backtrace[0] = j
-		return ( score[s-1,m-1] / sum(seq_durs), np.array(backtrace) )
+		return ( score[s-1,m-1] / np.sum(seq_durs), np.array(backtrace) )

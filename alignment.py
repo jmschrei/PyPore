@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@yahoo.com
+#          jacobtribe@soe.ucsc.com
 # alignment.py
 
 '''
@@ -36,10 +36,6 @@ class ProteinScoreMixin( object ):
 	def _score( self, x, y, matrix='BLOSUM60' ):
 		return getattr( ProteinScoreMixin, matrix )[x][y] 
 
-class NucleotideScoreMixin( object ):
-	def _score( self, x, y ):
-		return None
-
 class SegmentScoreMixin( object ):
 	def _score( self, x, y ):
 		t = math.fabs( x.mean - y.mean ) / math.sqrt( x.std * y.std )
@@ -50,6 +46,11 @@ class DifferenceScoreMixin( object ):
 		return x == y 
 
 class SegmentAligner( object ):
+	'''
+	An aligner made to align ionic current segments based on mean, variance, and
+	duration. The algorithm currently used is written by Dr. Kevin Karplus as a
+	semi-local alignment along the sequence. 
+	'''
 	def __init__( self, model, skip_penalty, backslip_penalty ):
 		self.model = model
 		means = np.array([ seg.mean for seg in model.states ])
@@ -57,6 +58,10 @@ class SegmentAligner( object ):
 		durs = np.array([ seg.duration for seg in model.states ])
 		self.aligner = cSegmentAligner( means, stds, durs, skip_penalty, backslip_penalty )
 	def align( self, seq ):
+		'''
+		Unpack the mean, standard deviation, and duration from the segment sequence.
+		If those are not properties of the segment, the alignment cannot be done.
+		'''
 		try:
 			means = np.array([ seg.mean for seg in seq.states ])
 			stds = np.array([ seg.std for seg in seq.states ])
@@ -66,6 +71,11 @@ class SegmentAligner( object ):
 			return None, None
 
 	def transform( self, seq, order ):
+		'''
+		Transform all of the sequences to align to the model better. Lengthens
+		the duration of some segments to match the model. Mean and std remain 
+		the same.
+		'''
 		if seq == None or order == None:
 			return None
 		model = self.model 
@@ -125,6 +135,9 @@ class PairwiseAligner( object ):
 		self.y = y
 
 	def global_alignment( self ):
+		'''
+		A typical global alignment across both axes, according to the Needleman-Wunch algorithm.
+		'''
 		m,n = len(self.x), len(self.y)
 		penalty = -1 
 		# Initialize the matrix
@@ -149,6 +162,10 @@ class PairwiseAligner( object ):
 		return self._traceback( pointer, self.x, self.y), score[i][j]
 
 	def _traceback( self, pointer, x, y ):
+		'''
+		Perform traceback on a pointer matrix. Follows the pointers all the way home,
+		and returns the aligned x and y sequences.
+		'''
 		i, j = pointer.shape[0] - 1, pointer.shape[1] - 1
 		xalign, yalign = [], []
 		while i > 0 and j > 0:
@@ -166,15 +183,3 @@ class PairwiseAligner( object ):
 				yalign.append( '-' ) 
 				i -= 1
 		return xalign, yalign
-
-if __name__ == '__main__':
-	data = File( "C:\Users\Jacob\Desktop\Abada\\12811001-s06.abf" )
-	print "parsing file"
-	data.parse()
-	print "parsing events"
-	for event in data.events:
-		event.parse( parser=StatSplit() )
-	aligner = PairwiseAligner( data.events[0].states, data.events[1].states )
-	(xalign, yalign), score = aligner.global_alignment()
-	print xalign[0:5]
-	print yalign[0:5]

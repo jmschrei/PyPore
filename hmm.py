@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@yahoo.com
+#          jacobtribe@soe.ucsc.com
 # hmm.py
 
 '''
@@ -14,8 +14,11 @@ import string
 import numpy as np
 
 class NanoporeHMM( GaussianHMM ):
-	def scale( self, salt_concentration, voltage ):
-		self.means_prior *= salt_concentration * voltage
+	def scale( self, mult=None, add=None ):
+		if mult:
+			self._means_ *= mult
+		if add:
+			self._means_ += add
 	def classify( self, event, algorithm = 'viterbi' ):
 		state_means = np.array( [ state.mean for state in event.states ] )
 		state_means.shape = ( state_means.shape[0], 1 )
@@ -62,26 +65,6 @@ def AbasicFinder():
 	hmm._covars_ = covars 
 	return hmm
 
-def tRNAbasic_A8T0H7():
-	n_components=7
-	startprob = np.array([ 0.8, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0] )
-	transmat = np.array([[ 0.1, 0.2, 0.7, 0.0, 0.0, 0.0, 0.0 ],
-						 [ 0.0, 0.1, 0.9, 0.0, 0.0, 0.0, 0.0 ],
-						 [ 0.0, 0.0, 0.8, 0.2, 0.0, 0.0, 0.0 ],
-						 [ 0.0, 0.0, 0.0, 0.1, 0.9, 0.0, 0.0 ],
-						 [ 0.0, 0.0, 0.0, 0.0, 0.7, 0.2, 0.1 ],
-						 [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.9 ],
-						 [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0 ]])
-
-	covars = np.array([[10],[1.42],[1.54],[1.18],[1.63],[1.32],[1.53]])
-	means = np.array( [ [44],[29.1],[24.4],[28.64],[25],[29.39],[24.47] ] )
-
-	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
-	hmm._means_ = means
-	hmm._covars_ = covars
-	hmm.colors = [ 'r', 'g', 'b', 'g', 'b', 'g', 'b' ]
-	return hmm
-
 def tRNAbasic_A8T0H11():
 	n_components=11
 
@@ -101,6 +84,32 @@ def tRNAbasic_A8T0H11():
 
 	covars = np.array([ [7.75],[1.15], [0.155],[0.352-.15],[0.427],[0.464],[0.8678],[0.533],[0.481],[1.46],   [2.19]] )
 	means = np.array( [ [40],  [29.1], [24.29],[26.04],    [23.8], [28.37],[26.8],  [25.4], [22.77],[28.06+1],[24.9] ] )
+
+	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
+	hmm._means_ = means
+	hmm._covars_ = covars
+	hmm.colors = [ 'r', 'y', 'b', 'b', 'b', 'g', 'b', 'b', 'b', 'm', 'b' ]
+	return hmm
+
+def tRNAbasic_A8T0H115():
+	n_components=11
+
+	startprob = np.array([ 0.20, 0.15, 0.55, 0.10, 0, 0, 0, 0, 0, 0, 0 ])
+
+	transmat = np.array([[ 0.10, 0.30, 0.60, 0, 0, 0, 0, 0, 0, 0, 0 ],
+						 [ 0, 0.30, 0.70, 0, 0, 0, 0, 0, 0, 0, 0 ],
+						 [ 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0, 0 ],
+						 [ 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0 ],
+						 [ 0, 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0 ],
+						 [ 0, 0, 0, 0, 0, 0.25, 0.70, 0.05, 0, 0, 0 ],
+						 [ 0, 0, 0, 0, 0, 0, 0.30, 0.70, 0, 0, 0 ],
+						 [ 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0, 0 ],
+						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0 ],
+						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.20, 0.80 ],
+						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.00 ]])
+
+	covars = np.array([ [7.75],[1.15], [0.155],[0.352-.15],[0.427],[0.464],[0.8678],[0.533],[0.481],[1.46],   [2.19]] )
+	means = np.array( [ [40],  [29.1], [24.29],[26.04],    [23.8], [28.37],[26.8],  [25.4], [22.77],[28.06+1],[24.9] ] )+5
 
 	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
 	hmm._means_ = means
@@ -132,5 +141,5 @@ def Bifurcator():
 
 hmm_factory = { 'Abasic Finder': AbasicFinder(),
 		 		'Bifurcator': Bifurcator(),
-		 		'tRNAbasic_A6T0H7': tRNAbasic_A8T0H7(),
-		 		'tRNAbasic_A6T0H11': tRNAbasic_A8T0H11() }
+		 		'tRNAbasic_A8T0H11': tRNAbasic_A8T0H11(),
+		 		'tRNAbasic_A8T0H115' : tRNAbasic_A8T0H115() }

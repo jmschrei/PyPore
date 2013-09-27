@@ -39,6 +39,9 @@ class Segment( object ):
                 self.duration = self.n / self.second
             if hasattr( self, 'start' ):
                 self.start = self.start / self.second
+	def delete( self ):
+		del self.current
+		del self
 
     @property
     def mean( self ):

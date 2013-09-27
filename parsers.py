@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@yahoo.com
+#          jacobtribe@soe.ucsc.com
 # parsers.py 
 # 
 # This program will read in an abf file using read_abf.py and
@@ -120,7 +120,7 @@ class lambda_event_parser( parser ):
         mask = np.abs( np.diff( mask ) )                  # Find the edges, marking them with a 1, by derivative
         tics = np.concatenate( ( [0], np.where(mask ==1)[0]+1, [current.shape[0]] ) )
         del mask
-        events = [ Segment(current=np.array(current, copy=True), 
+        events = [ Segment(current=np.array(current), copy=True, 
                             start=tics[i], 
                             duration=current.shape[0]/100000. ) for i, current in enumerate( np.split( current, tics[1:-1]) ) ]
         return [ event for event in self._lambda_select( events ) ]

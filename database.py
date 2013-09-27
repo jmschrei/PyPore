@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@yahoo.com
+#          jacobtribe@soe.ucsc.com
 # database.py
 
 '''
@@ -58,7 +58,7 @@ class GoogleSpreadsheetInterface( object ):
     def write( self, dataframe ):
         '''
         Takes in a pandas dataframe, and writes it to the google spreadsheet. This spreadsheet must already
-        exist. 
+        exist. Currently not supported.
         '''
         pass
 
@@ -103,6 +103,10 @@ class MySQLDatabaseInterface( object ):
         self.cursor = self.db.cursor()
 
     def execute( self, statement ):
+        '''
+        Execute an arbitrary SQL statement. No restriction on the type of statements which
+        can be executed, except those imposed by the SQL user. 
+        '''
         self.cursor.execute( statement )
         return
         try:
