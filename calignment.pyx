@@ -1,6 +1,7 @@
 import numpy as np
 cimport numpy as np
 cimport cython
+import time
 
 from cython.view cimport array as cvarray
 
