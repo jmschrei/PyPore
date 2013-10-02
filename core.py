@@ -17,59 +17,64 @@ class MetaSegment( object ):
 		for key, value in kwargs.iteritems():
 			setattr( self, key, value )
 
-class Segment( object ):
-    '''
-    An abstract segment of ionic current. Other information may be loaded in upon initialization. Magic
-    methods assume reference to the ionic current stored in it. 
-    '''
-    def __init__( self, current, **kwargs ):
-        '''
-        The segment must have a list of ionic current, of which it stores some statistics about. It may
-        also take in as many keyword arguments as needed, such as start time or duration if already
-        known. Cannot override statistical measurements. 
-        '''
-        self.current = current
-        self.n = current.shape[0] 
-
-        for key, value in kwargs.iteritems():
-        	setattr( self, key, value )
-
-        if hasattr( self, 'second' ): 
-            if not hasattr( self, 'duration' ):
-                self.duration = self.n / self.second
-            if hasattr( self, 'start' ):
-                self.start = self.start / self.second
 	def delete( self ):
-		del self.current
 		del self
 
-    @property
-    def mean( self ):
-    	return np.mean( self.current )
-    @property
-    def std( self ):
-    	return np.std( self.current )
-    @property
-    def min( self ):
-    	return np.min( self.current )
-    @property
-    def max( self ):
-    	return np.max( self.current )
-    @property
-    def end( self ):
-    	return self.start + self.duration
+class Segment( object ):
+	'''
+	A segment of ionic current, and methods relevant for collecting metadata. The ionic current is expected
+	to be passed as a numpy array of floats. Metadata methods (mean, std..) are decorated as properties to
+	reduce overall computational time, making them calculated on the fly rather than during analysis.
+	'''
+	def __init__( self, current, **kwargs ):
+		'''
+		The segment must have a list of ionic current, of which it stores some statistics about. It may
+		also take in as many keyword arguments as needed, such as start time or duration if already
+		known. Cannot override statistical measurements. 
+		'''
+		self.current = current
+		self.n = current.shape[0] 
+		for key, value in kwargs.iteritems():
+			if key == 'delete':
+				continue
+			setattr( self, key, value )
 
-    def __getitem__( self, index ):
-        '''Slicing this object is assumed to be slicing the current stored in it'''
-        return self.current[ index ]
-    def __repr__( self ):
-        return "{mean}".format( mean = round(self.mean, 2) )
-    def __len__( self ):
-        return self.current.shape[0]
-    def __add__( self, otherSegment ):
-    	if isinstance( otherSegment, Segment ):
-    		return Segment( current=np.concatenate( ( self.current, otherSegment.current ) ) )
-    	return self
+		if hasattr( self, 'second' ): 
+			if not hasattr( self, 'duration' ):
+				self.duration = self.n / self.second
+			if hasattr( self, 'start' ):
+				self.start = self.start / self.second
+
+	def __repr__( self ):
+		return "{mean} (+/- {std})".format( mean=round(self.mean,2), std=round(self.std,2) )
+	def __len__( self ):
+		return self.current.shape[0]
+	def __add__( self, otherSegment ):
+		if isinstance( otherSegment, Segment ):
+			return Segment( current=np.concatenate(( self.current, otherSegment.current )))
+		return self
+
+	@property
+	def mean( self ):
+		return np.mean( self.current )
+	@property
+	def std( self ):
+		return np.std( self.current )
+	@property
+	def min( self ):
+		return np.min( self.current )
+	@property
+	def max( self ):
+		return np.max( self.current )
+	@property
+	def end( self ):
+		return self.start + self.duration
+
+	def delete( self ):
+		try:
+			del self.current
+		except:
+			pass
 
 class Container( object ):
 	'''

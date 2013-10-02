@@ -34,39 +34,43 @@ class parser( object ):
     def __init__( self ):
         pass
     def parse( self, current ):
-        '''
-        Take in the full current of a file or event, and return a list of tuples of the format
-        ( start, [ current ] ).
-        '''
+        ''' Takes in a current segment, and returns a list of segment objects. '''
         return [ Segment( current=current, start=0, duration=current.shape[0]/100000 ) ]
+
     def __repr__( self ):
+        ''' Returns a representation of the parser in the form of all arguments. '''
         rep = self.__class__.__name__ + ": "
         try:
-            for key, val in self.gui_attrs.items():
-                rep += "{0}:{1}".format(key, value)
+            rep += ', '.join("{0}:{1}".format(key,val) for key,val in self.__dict__.items()
+                                                       if key != 'param_dict'
+                                                       if type(val) in (int, float)
+                                                          or ('Qt' not in repr(val) 
+                                                               and 'lambda' not in repr(val)))
         except:
             pass
         return rep 
-    def __setattr__( self, key, value ):
-        try:
-            gui_attrs = getattr( self, "gui_attrs" )
-        except AttributeError:
-            gui_attrs = {}
-        if key != "param_dict":
-            gui_attrs[key] = value
-            object.__setattr__( self, "gui_attrs", gui_attrs )
-        object.__setattr__( self, key, value )
+
     def GUI( self ):
+        '''
+        A generic GUI built using PyQt4 based off the arguments presented in upon
+        initialization. Requires PyQt4 to use, but the parser class does not require
+        PyQt4 to run.
+        '''
         grid = Qt.QGridLayout()
         param_dict = {}
-        for i, (key, val) in enumerate( self.gui_attrs.items() ):
+        for i, (key, val) in enumerate( self.__dict__.items() ):
             param_dict[key] = Qt.QLineEdit()
             param_dict[key].setText( str(val) )
             grid.addWidget( Qt.QLabel(key), i, 0 )
             grid.addWidget( param_dict[key], i, 1 )
         self.param_dict = param_dict
         return grid
+
     def set_params( self ):
+        '''
+        Updates each paramater presented in the GUI to the value input in the lineEdit
+        corresponding to that value.
+        '''
         try:
             for key, lineEdit in self.param_dict.items():
                 val = lineEdit.text()
@@ -82,8 +86,12 @@ class parser( object ):
         except:
             pass
 
-
 class MemoryParse():
+    '''
+    A parser based on being fed previous split points, and splitting a raw file based
+    those splits. Used predominately when loading previous split points from the 
+    database cache, to reconstruct a parsed file from "memory.""
+    '''
     def __init__( self, starts, ends ):
         self.starts = starts
         self.ends = ends
@@ -182,13 +190,11 @@ class lambda_event_parser( parser ):
         if self.rules == []:
             self.rules = None
 
-# from itertools documentation
 def pairwise(iterable):
     "s -> (s0,s1), (s1,s2), (s2, s3), ..."
     a, b = tee(iterable)
     next(b, None)
     return izip(a, b)
-
 
 class StatSplit( parser ):
     def __init__(self, min_width=1000, max_width=1000000, 
@@ -196,7 +202,8 @@ class StatSplit( parser ):
                 window_width=10000,
                 use_log=True,
             splitter="stepwise"):
-        """create a segmenter with specified minimum and maximum segment lengths.
+        """
+        create a segmenter with specified minimum and maximum segment lengths.
         (Default for max_width is 100*min_width)
         min_gain_per_sample is the minimum reduction in variance for a split to be done;
             it is multiplied by window_width to get min_gain.
@@ -214,7 +221,8 @@ class StatSplit( parser ):
         self.splitter = splitter
     
     def parse(self,current, start=0, end=-1):
-        """segments current[start:end], where current is a numpy array 
+        """
+        segments current[start:end], where current is a numpy array 
         
         returns list of segments:
             [ (start, duration0, left_end, right_end, rms residual)
@@ -264,14 +272,7 @@ class StatSplit( parser ):
                               start=start,
                               duration=(end-start)/100000 ) for start,end in paired ]
             return segments
-            '''
-            return [seg for seg in izip(  chain([start],breakpoints),
-                          ((e-s) for (s,e) in paired),
-                          means,
-                          means,
-                          (np.sqrt(var) for var in vars )
-                       )]
-            '''
+
         lrs = [self._lr(pair[0],pair[1]) for pair in paired]
         lefts = [alpha+beta*s for (alpha,beta,var),(s,e) in izip(lrs,paired)]
         rights = [alpha+beta*e for (alpha,beta,var),(s,e) in izip(lrs,paired)]
@@ -279,14 +280,6 @@ class StatSplit( parser ):
                               start=start,
                               duration=(end-start)/100000 ) for start,end in paired ]
         return segments 
-        '''
-        return [seg for seg in izip(  chain([start],breakpoints),
-                      ((e-s) for (s,e) in paired),
-                      lefts,
-                      rights,
-                      (np.sqrt(var) for alpha,beta,var in lrs)
-                   )]
-        '''
 
     def _mean_c(self, start, end):
         """mean value of current for segment start:end
@@ -432,7 +425,6 @@ class StatSplit( parser ):
             high_var_summed = (end-i)*(self._lr(i,end)[2] if not self.use_log
                 else log(self._lr(i,end)[2]))
             gain =  var_summed - (low_var_summed+high_var_summed)
-            print(gain)
             if gain > max_gain:
                 max_gain= gain
                 x=i
@@ -485,7 +477,7 @@ class StatSplit( parser ):
             + [split_at] \
             + self._segment_cumulative(split_at,end)
 
-class SpeedyStatSplit(parser):
+class SpeedyStatSplit( parser ):
     def __init__( self, min_width=1000, max_width=1000000, window_width=10000, min_gain_per_sample=0.03 ):
         self.min_width = min_width
         self.max_width = max_width
@@ -525,7 +517,6 @@ class SpeedyStatSplit(parser):
             self.window_width = int(self.windowWidth.text())
             self.min_gain_per_sample = float(self.minGain.text())
         except:
-            print ("herp")
             pass
 
 #########################################

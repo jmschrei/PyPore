@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@yahoo.com
+#          jacobtribe@soe.ucsc.com
 # DataTypes.py
 
 '''
@@ -31,9 +31,9 @@ from core import *
 from database import *
 import parsers
 from alignment import *
-from align_segments import *
                  
 import time
+from itertools import chain, izip, tee, combinations
 
 class Event( Segment ):
     '''
@@ -42,7 +42,7 @@ class Event( Segment ):
     '''
     def __init__( self, current, start, file, n ):
         Segment.__init__( self, current, file=file, duration=current.shape[0]/file.second, 
-                          filtered=False, start = start / file.second, states=[], sample=None, n=0 )
+                          filtered=False, start =start/file.second, states=[], sample=None, n=0 )
          
     def filter( self, order = 1, cutoff = 2000. ):
         '''
@@ -54,6 +54,8 @@ class Event( Segment ):
         (b, a) = signal.bessel( order, cutoff / nyquist, btype='low', analog=0, output = 'ba' )
         self.current = signal.filtfilt( b, a, self.current )
         self.filtered = True
+        self.filter_order = order
+        self.filter_cutoff = cutoff
 
     def parse( self, parser = parsers.snakebase_parser( threshold = 1.5 ), filter = False ):
         '''
@@ -66,14 +68,68 @@ class Event( Segment ):
                                            second = self.file.second, event = self ) for segment in parser.parse( self.current ) ] ) 
         self.n = self.states.shape[0]
         self.state_parser = parser
+
+    def delete( self ):
+        try:
+            del self.current
+        except:
+            pass
+
+        try:
+            self.state_parser
+        except:
+            pass
+
+        for segment in self.states:
+            segment.delete()
+        del self
+
+    def apply_hmm( self, hmm ):
+        try:
+            segments = np.array([ state.mean for state in self.states ])
+            segments.shape = (segments.shape[0], 1)
+        except AttributeError:
+            return
+
+        return hmm.predict( segments )
                 
-    def plot( self ):
+    def plot( self, hmm=None, **kwargs ):
         '''
         Plot the states in an event in a cycle of colors, to show where state detection occured at. 
         '''
-        for i, state in enumerate(self.states):
-            plt.plot( xrange( state.start, state.start + state.n ), state.current, 'brgc'[i%4] )
-        plt.show()
+        if hmm:
+            hmm_seq = self.apply_hmm( hmm )
+            if hasattr( hmm, 'colors' ):
+                color_cycle = [ hmm.colors[i] for i in hmm_seq ]
+            else:
+                color_cycle = [ 'rbgmcyk'[i%7] for i in hmm_seq ]
+
+        if 'color' in kwargs.keys():
+            if kwargs['color'] == 'cycle':
+                color = [ 'brgc'[i%4] for i in xrange(self.n) ]
+            elif kwargs['color'] == 'hmm':
+                if hmm:
+                    hmm_seq = self.apply_hmm( hmm )
+                    if hasattr( hmm, 'colors' ):
+                        color = [ hmm.colors[i] for i in hmm_seq ]
+                    else:
+                        color = 'k'
+            else:
+                color = kwargs['color']
+            del kwargs['color']
+
+        if len(color) == 1:
+            plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
+        else:
+            for c, segment in zip( color, self.states ):
+                plt.plot( np.arange(0, segment.duration, 1./self.file.second) + segment.start, segment.current, color=c, **kwargs )
+
+        plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
+        plt.xlabel( "Time (s)" )
+        plt.ylabel( "Current (pA)" )
+        plt.grid( color='gray', linestyle=':' )
+        plt.ylim( np.min( self.current ) - 5, np.max( self.current )  )
+        plt.xlim( 0, self.current.shape[0] / self.file.second )
 
     @classmethod
     def from_segments( self, *segments ):
@@ -123,31 +179,55 @@ class File( Segment ):
         which returns a tuple corresponding to the 
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
-        self.events = [ Event( current = segment.current, start = segment.start, file = self, n=0 ) for segment in parser.parse( self.current ) ]
+        self.events = [ Event( current=segment.current, start=segment.start, file=self, n=0 ) for segment in parser.parse( self.current ) ]
         self.n = len( self.events )
         self.event_parser = parser
         del self.current
 
+    def delete( self ):
+        try:
+            del self.current
+        except:
+            pass
+
+        try:
+            del self.event_parser
+        except:
+            pass
+
+        for event in self.events:
+            event.delete()
+        del self
+
     @classmethod 
-    def from_database( self, database, host, password, user, AnalysisID=None, filename=None ):
+    def from_database( self, database, host, password, user, AnalysisID=None, filename=None,
+                       eventDetector=None, eventDetectorParams=None, stateDetector=None,
+                       stateDetectorParams=None, filterCutoff=None, filterOrder=None  ):
         '''
         Loads the cache for the file, if this exists. Can either provide the AnalysisID to unambiguously
         know which analysis to use, or the filename if you want the most recent analysis done on that file.
         '''
         db = MySQLDatabaseInterface(db=database, host=host, password=password, user=user)
 
-        if AnalysisID != None:
-            query = db.read("SELECT Filename FROM AnalysisMetadata \
-                                WHERE ID={}".format(AnalysisID) )
-            try:
-                filename = query[0][0]
-            except:
-                raise DatabaseError("No analysis found with ID {}".format(AnalysisID))
+        keys = ( "ID", "Filename", "EventDetector", "EventDetectorParams",
+                 "StateDetector", "StateDetectorParams", "FilterCutoff", "FilterOrder" )
+        vals = ( AnalysisID, filename, eventDetector, eventDetectorParams, stateDetector,
+                 stateDetectorParams, filterCutoff, filterOrder )
+        
+        query_list = []
+        for key, val in zip( keys, vals ):
+            if val:
+                if key not in ['ID', 'FilterCutoff', 'FilterOrder']:
+                    query_list += ["{key} = '{val}'".format( key=key, val=val )]
+                else:
+                    query_list += ["{key} = {val}".format( key=key, val=val )]
 
-        elif filename != None:
-            AnalysisID = int( db.read( "SELECT ID FROM AnalysisMetadata \
-                                        WHERE Filename = '{}' \
-                                        ORDER BY Timestamp DESC".format(filename))[0][0])
+        query = "SELECT * FROM AnalysisMetadata WHERE "+" AND ".join(query_list)+" ORDER BY TimeStamp DESC" 
+
+        try:
+            filename, _, AnalysisID = db.read( query )[0][0:3]
+        except:
+            raise DatabaseError("No analysis found with given parameters.")
 
         try:
             file = File(filename+".abf")
@@ -184,25 +264,37 @@ class File( Segment ):
         event_parser_name = self.event_parser.__class__.__name__
         event_parser_params = repr( self.event_parser )
         try:
-            state_parser_name = self.event[0].state_parser.__class__.__name__
-            state_parser_params = repr( self.event[0].state_parser )
+            state_parser_name = self.events[0].state_parser.__class__.__name__
+            state_parser_params = repr( self.events[0].state_parser )
         except:
             state_parser_name = "NULL"
             state_parser_params = "NULL"
 
-        metadata = "'{0}',NULL,NULL,'{1}','{2}','{3}','{4}'".format( self.filename,
+        try:
+            filter_order = self.events[0].filter_order
+            filter_cutoff = self.events[0].filter_cutoff
+        except:
+            filter_order = "NULL"
+            filter_cutoff = "NULL"
+
+        metadata = "'{0}',NULL,NULL,'{1}','{2}','{3}','{4}', {5}, {6}".format( self.filename,
                                                                      event_parser_name,
                                                                      event_parser_params,
                                                                      state_parser_name,
-                                                                     state_parser_params 
+                                                                     state_parser_params,
+                                                                     filter_order,
+                                                                     filter_cutoff
                                                                     )
+        try:
+            prevAnalysisID = db.read( "SELECT ID FROM AnalysisMetadata \
+                                       WHERE Filename = '{0}' \
+                                           AND EventDetector = '{1}' \
+                                           AND StateDetector = '{2}'".format( self.filename,
+                                                                            event_parser_name,
+                                                                            state_parser_name ) )[0][0]
+        except IndexError:
+            prevAnalysisID = None
 
-        prevAnalysisID = db.read( "SELECT ID FROM AnalysisMetadata \
-                                   WHERE Filename = '{0}' \
-                                       AND EventDetector = '{1}' \
-                                       AND StateDetector = '{2}'".format( self.filename,
-                                                                        event_parser_name,
-                                                                        state_parser_name ) )[0][0]
         if prevAnalysisID is not None:
             prevAnalysisEventIDs = db.read( "SELECT ID FROM Events \
                                  WHERE AnalysisID = {0}".format( prevAnalysisID ) )
@@ -258,15 +350,37 @@ class Experiment( Container ):
             _, segs = hmm.classify( event )
             segments = np.concatenate( ( segments, segs ) )
         return segments
-        
+    def delete( self ):
+        try:
+            del self.events
+        except AttributeError:
+            pass
+
+        try:
+            del self.states
+        except AttributeError:
+            pass
+
+        for sample in self.samples:
+            sample.delete()
+        for file in self.files:
+            file.delete()
+        del self 
+ 
 class Sample( Container ):
     '''A container for events all suggested to be from the same substrate.'''
     def __init__( self, label=None ):
         self.events = []
         self.files = [] 
         self.label = label
-
-from itertools import chain, izip, tee, combinations
+    def delete( self ):
+        for file in self.files:
+            file.delete()
+        for event in self.events:
+            event.delete()
+        del self.events
+        del self.files
+        del self
 
 def flatten( listOfLists ):
     return chain.from_iterable( listOfLists )
@@ -297,17 +411,17 @@ class MultipleEventAlignment( object ):
         self.pairwise = np.zeros( (self.n, self.n) )
         self.score = 0
 
-    def align( self, strategy, model_id=None ):
+    def align( self, strategy, model_id=None, skip=0.01, backslip=0.1 ):
         if strategy == 'one-vs-all':
             assert model_id is not None
-            self._one_vs_all( model_id=model_id )
+            self._one_vs_all( model_id=model_id, skip=skip, backslip=backslip )
         elif strategy == 'all-vs-all':
             self._all_vs_all()
         else:
             raise AttributeError( "alignment_type must be one-vs-all or all-vs-all." )
 
-    def _one_vs_all( self, model_id ):
-        aligner = SegmentAligner( self.events[model_id], .01, .1 )
+    def _one_vs_all( self, model_id, skip=0.01, backslip=0.1 ):
+        aligner = SegmentAligner( self.events[model_id], skip_penalty=skip, backslip_penalty=backslip )
         self.aligned_events = []
         self.model_id = model_id
         for i, event in enumerate( self.events ):

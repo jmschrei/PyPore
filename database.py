@@ -107,13 +107,11 @@ class MySQLDatabaseInterface( object ):
         Execute an arbitrary SQL statement. No restriction on the type of statements which
         can be executed, except those imposed by the SQL user. 
         '''
-        self.cursor.execute( statement )
-        return
         try:
             self.cursor.execute( statement )
-            self.cursor.commit()
         except:
             raise DatabaseError( "MySQL Error: Unable to execute statement '{}'".format(statement) )
+        self.db.commit()
 
     def read( self, query = None ):
         if not query:
