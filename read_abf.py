@@ -207,6 +207,6 @@ def read_abf(abf_file):
 
     file_array = numpy.memmap(abf_file, mode="r", dtype=numpy.dtype("<i2"), offset=DataBlockIndex*ABF_BLOCKSIZE)
     # Copy and convert to float
-    current = numpy.array( file_array[:DataNumEntries:ADCNumEntries], dtype=numpy.float, copy=True ) * scale_factor[0] + offset_to_add[0]
+    current = numpy.array( file_array[:DataNumEntries:ADCNumEntries], dtype=numpy.float ) * scale_factor[0] + offset_to_add[0]
     abf_file.close()
     return time_step_msec, current

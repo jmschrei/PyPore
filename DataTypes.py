@@ -32,6 +32,7 @@ from database import *
 import parsers
 from alignment import *
                  
+import json
 import time
 from itertools import chain, izip, tee, combinations
 
@@ -40,7 +41,7 @@ class Event( Segment ):
     A container for the ionic current corresponding to an 'event', which means a portion of the 
     file containing useful data. 
     '''
-    def __init__( self, current, start, file, n ):
+    def __init__( self, current, start, file ):
         Segment.__init__( self, current, file=file, duration=current.shape[0]/file.second, 
                           filtered=False, start =start/file.second, states=[], sample=None, n=0 )
          
@@ -49,6 +50,8 @@ class Event( Segment ):
         Performs a bessel filter on the selected data, normalizing the cutoff frequency by the nyquist
         limit based on the sampling rate. 
         '''
+        if type(self) != Event:
+            raise TypeError( "Cannot filter a metaevent. Must have the current." )
         from scipy import signal
         nyquist = self.file.second / 2.
         (b, a) = signal.bessel( order, cutoff / nyquist, btype='low', analog=0, output = 'ba' )
@@ -62,10 +65,12 @@ class Event( Segment ):
         Ensure that the data is filtered according to a bessel filter, and then applies a plug-n-play 
         state parser which must contain a .parse method. 
         '''
+        if type(self) != Event:
+            raise TypeError( "Cannot parse a metaevent. Must have the current." )
         if self.filtered == False and filter:
             self.filter()
-        self.states = np.array( [ Segment( current = segment.current, start = segment.start, 
-                                           second = self.file.second, event = self ) for segment in parser.parse( self.current ) ] ) 
+        self.states = np.array( [ Segment( current=segment.current, start=segment.start, 
+                                           second=self.file.second, event=self ) for segment in parser.parse( self.current ) ] ) 
         self.n = self.states.shape[0]
         self.state_parser = parser
 
@@ -117,19 +122,98 @@ class Event( Segment ):
             else:
                 color = kwargs['color']
             del kwargs['color']
+        else:
+            color = 'b'
 
         if len(color) == 1:
-            plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
+            if self.__class__.__name__ == "MetaEvent":
+                x = ( 0, self.duration )
+                y_high = lambda z: self.mean + z * self.std
+                y_low = lambda z: self.mean - z * self.std
+                plt.plot( x, ( self.mean, self.mean ), color=color, **kwargs )
+                plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.6 )
+                plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.4 )
+                plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.2 )
+            else:
+                plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
         else:
             for c, segment in zip( color, self.states ):
-                plt.plot( np.arange(0, segment.duration, 1./self.file.second) + segment.start, segment.current, color=c, **kwargs )
+                if isinstance( segment, MetaSegment ):
+                    x = ( segment.start, segment.duration+segment.start )
+                    y_high = lambda z: segment.mean + z * segment.std
+                    y_low = lambda z: segment.mean - z * segment.std
+                    plt.plot( x, (segment.mean, segment.mean), color=c, **kwargs )
+                    plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.6 )
+                    plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.4 )
+                    plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.2 )
+                else:
+                    plt.plot( np.arange(0, segment.duration, 1./self.file.second) + segment.start, segment.current, color=c, **kwargs )
 
         plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
         plt.xlabel( "Time (s)" )
         plt.ylabel( "Current (pA)" )
         plt.grid( color='gray', linestyle=':' )
-        plt.ylim( np.min( self.current ) - 5, np.max( self.current )  )
-        plt.xlim( 0, self.current.shape[0] / self.file.second )
+        plt.ylim( self.min - 5, self.max  )
+        plt.xlim( 0, self.duration )
+
+    def to_meta( self ):
+        for prop in ['mean', 'std', 'duration', 'start', 'min', 'max', 'end', 'start']:
+            try:
+                self.__dict__[prop] = getattr( self, prop )
+            except:
+                pass
+
+        try:
+            del self.current
+        except:
+            pass
+
+        for segment in self.states:
+            segment.to_meta()
+
+        self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
+
+    def to_dict( self ):
+        keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration', 'filtered', 
+                'filter_order', 'filter_cutoff', 'n', 'state_parser', 'states' ]
+        d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
+        d['name'] = self.__class__.__name__
+        return d
+
+    def to_json( self, filename=None ):
+        d = self.to_dict()
+
+        try:
+            d['states'] = [ seg.to_dict() for seg in d['states'] ]
+        except:
+            pass
+
+        try:
+            d['state_parser'] = d['state_parser'].to_dict()
+        except:
+            pass
+
+        _json = json.dumps( d, indent=4, separators=( ',', ' : ' ) )
+        if filename:
+            with open( filename, 'w' ) as out:
+                out.write( _json )
+        return _json
+
+    @classmethod
+    def from_json( self, _json ) :
+        if _json.endswith( ".json" ):
+            with open( _json, 'r' ) as infile:
+                _json = ''.join(line for line in infile)
+
+        d = json.loads( _json )
+
+        event = MetaSegment() 
+        if 'current' not in d.keys():
+            event.__class__ = type("MetaEvent", (MetaSegment,), d )
+        else:
+            event = Event( d['current'], d['start'], )
+
+        
 
     @classmethod
     def from_segments( self, *segments ):
@@ -142,6 +226,7 @@ class Event( Segment ):
             std = np.sqrt( sum( seg.std ** 2 * seg.duration ) / dur )  
             MetaSegment.__init__( self, states=segments, sample=None, n=len(segments),
                                   duration=dur, mean=mean, std=std )
+            self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
 
     @classmethod
     def from_database( self, database, host, password, user, AnalysisID, SerialID ):
@@ -165,11 +250,11 @@ class File( Segment ):
     A container for the raw ionic current pulled from a .abf file, and metadata as to
     the events detected in the file. 
     '''
-    def __init__( self, filename ):
+    def __init__( self, filename, **kwargs ):
         timestep, current = read_abf( filename )
         filename = filename.split("\\")[-1].split(".abf")[0]
         Segment.__init__( self, current=current, filename=filename, second=1000./timestep, events=[], sample=None, n=0 )
-    
+
     def __getitem__( self, index ):
         return self.events[ index ]
 
@@ -179,7 +264,7 @@ class File( Segment ):
         which returns a tuple corresponding to the 
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
-        self.events = [ Event( current=segment.current, start=segment.start, file=self, n=0 ) for segment in parser.parse( self.current ) ]
+        self.events = [ Event( current=segment.current, start=segment.start, file=self ) for segment in parser.parse( self.current ) ]
         self.n = len( self.events )
         self.event_parser = parser
         del self.current
@@ -199,6 +284,81 @@ class File( Segment ):
             event.delete()
         del self
 
+    def to_meta( self ):
+        try:
+            del self.current
+        except:
+            pass
+
+        for event in self.events:
+            event.to_meta()
+
+        self.__class__ = type( "MetaFile", (File,), self.__dict__ )
+
+    def to_dict( self ):
+        keys = [ 'filename', 'n', 'event_parser', 'mean', 'std', 'duration', 'start', 'end', 'events' ]
+        d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
+        d['name'] = self.__class__.__name__
+        return d
+
+    def to_json( self, filename=None ):
+        d = self.to_dict()
+
+        devents = []
+        for event in d['events']:
+            devent = event.to_dict()
+            try:
+                devent['states'] = [ state.to_dict() for state in devent['states'] ]
+                devent['state_parser'] = devent['state_parser'].to_dict()
+            except:
+                pass
+            devents.append( devent )
+        d['events'] = devents
+        d['event_parser'] = d['event_parser'].to_dict()
+
+        _json = json.dumps( d, indent=4, separators=( ',', ' : ' ) )
+
+        if filename:
+            with open( filename, 'w' ) as outfile:
+                outfile.write( _json )
+        return _json
+
+    @classmethod
+    def from_json( self, _json ):
+        if _json.endswith(".json"):
+            with open( _json, 'r' ) as infile:
+                _json = ''.join(line for line in infile)
+
+        d = json.loads( _json )
+
+        if d['name'] != "File":
+            raise TypeError( "JSON does not encode a file" )
+
+        file = File( d['filename']+".abf" )
+        file.event_parser = parser.from_json( json.dumps(d['event_parser']) )
+        file.events = []
+
+        for _json in d['events']:
+            s, e = _json['start']*file.second, _json['end']*file.second
+
+            event = Event( current=file.current[ s:e ], start=s, file=file )
+
+            if _json['filtered']: # FIX HERE !!!!
+                event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
+
+
+            event.states = [ Segment( current=file.current[ s+s_json['start']*file.second : s+s_json['end']*file.second ],
+                                      second=file.second, event=event, start=s_json['start']*file.second )
+                                                                for s_json in _json['states'] ]
+            event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
+            event.n = _json['n']
+            event.filtered = _json['filtered']
+            file.events.append( event )
+
+        file.n = d['n']
+
+        return file
+
     @classmethod 
     def from_database( self, database, host, password, user, AnalysisID=None, filename=None,
                        eventDetector=None, eventDetectorParams=None, stateDetector=None,
@@ -213,7 +373,7 @@ class File( Segment ):
                  "StateDetector", "StateDetectorParams", "FilterCutoff", "FilterOrder" )
         vals = ( AnalysisID, filename, eventDetector, eventDetectorParams, stateDetector,
                  stateDetectorParams, filterCutoff, filterOrder )
-        
+
         query_list = []
         for key, val in zip( keys, vals ):
             if val:
@@ -420,7 +580,7 @@ class MultipleEventAlignment( object ):
         else:
             raise AttributeError( "alignment_type must be one-vs-all or all-vs-all." )
 
-    def _one_vs_all( self, model_id, skip=0.01, backslip=0.1 ):
+    def _one_vs_all( self, model_id, skip, backslip ):
         aligner = SegmentAligner( self.events[model_id], skip_penalty=skip, backslip_penalty=backslip )
         self.aligned_events = []
         self.model_id = model_id
@@ -431,7 +591,16 @@ class MultipleEventAlignment( object ):
             aligned_event = aligner.transform( event, order )
             if aligned_event:
                 self.aligned_events.append( aligned_event )
-        self.score = np.sum( self.pairwise ) / i 
+        self.score = np.sum( self.pairwise ) / i
+
+    def _all_vs_all( self, skip, backslip ):
+        for i, model in enumerate( self.events ):
+            aligner = SegmentAligner( model, skip_penalty=skip, backslip_penalty=backslip )
+            for j, event in enumerate( self.events ):
+                if i == j:
+                    continue
+                self.pairwise[i][j] = self.pairwise[j][i] = aligner.align( event )
+        self.score = np.sum( self.pairwise ) / np.prod( self.pairwise.shape )
 
     def plot( self ):
         for i, event in enumerate( self.aligned_events ):

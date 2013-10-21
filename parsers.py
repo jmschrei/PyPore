@@ -9,7 +9,9 @@
 from __future__ import division, print_function
 import sys
 from itertools import tee,izip,chain
+import re
 
+import PyPore
 import time
 import numpy as np
 try:
@@ -17,7 +19,7 @@ try:
     from PyQt4 import QtCore as Qc
 except:
     pass
-from core import Segment
+from core import *
 
 try:
     import pyximport
@@ -26,6 +28,8 @@ try:
 except:
     pass
 
+import json
+
 #########################################
 # EVENT PARSERS
 #########################################
@@ -33,22 +37,29 @@ except:
 class parser( object ):
     def __init__( self ):
         pass
-    def parse( self, current ):
-        ''' Takes in a current segment, and returns a list of segment objects. '''
-        return [ Segment( current=current, start=0, duration=current.shape[0]/100000 ) ]
 
     def __repr__( self ):
         ''' Returns a representation of the parser in the form of all arguments. '''
-        rep = self.__class__.__name__ + ": "
-        try:
-            rep += ', '.join("{0}:{1}".format(key,val) for key,val in self.__dict__.items()
-                                                       if key != 'param_dict'
-                                                       if type(val) in (int, float)
-                                                          or ('Qt' not in repr(val) 
-                                                               and 'lambda' not in repr(val)))
-        except:
-            pass
-        return rep 
+        return self.to_json()
+
+    def to_dict( self ):
+        d = { key: val for key, val in self.__dict__.items() if key != 'param_dict'
+                                                             if type(val) in (int, float)
+                                                                    or ('Qt' not in repr(val) )
+                                                                    and 'lambda' not in repr(val) }
+        d['name'] = self.__class__.__name__
+        return d
+
+    def to_json( self, filename=False ):
+        _json = json.dumps( self.to_dict(), indent=4, separators=( ',', ' : ' ) )
+        if filename:
+            with open( filename, 'r' ) as out:
+                out.write( _json )
+        return _json
+
+    def parse( self, current ):
+        ''' Takes in a current segment, and returns a list of segment objects. '''
+        return [ Segment( current=current, start=0, duration=current.shape[0]/100000 ) ]
 
     def GUI( self ):
         '''
@@ -78,7 +89,7 @@ class parser( object ):
                     setattr( self, key, float( val ) )
                     continue
                 for i, letter in enumerate(val):
-                    if str(letter) not in '1234567890':
+                    if not letter.isdigit():
                         setattr( self, key, str( val ) )
                         continue
                     if i == len(val):
@@ -86,7 +97,20 @@ class parser( object ):
         except:
             pass
 
-class MemoryParse():
+    @classmethod
+    def from_json( self, _json ):
+        if _json.endswith(".json"):
+            with open( _json, 'r' ) as infile:
+                _json = ''.join(line for line in infile)
+
+        d = json.loads( _json )
+        name = d['name']
+        del d['name']
+
+        return getattr( PyPore.parsers, name )( **d )
+
+
+class MemoryParse( object):
     '''
     A parser based on being fed previous split points, and splitting a raw file based
     those splits. Used predominately when loading previous split points from the 

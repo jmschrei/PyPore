@@ -9,7 +9,6 @@ to connect to either a SQL database, a google docs spreadsheet, or an excel spre
 either read from or write to these databases, from shared read or write methods. A Factory class will handle the production
 of the appropriate interface. This module uses a pandas dataframe as an intermediary for all data storage efforts. 
 '''
-import pandas as pd
 import numpy as np
 import collections
 
@@ -47,14 +46,10 @@ class GoogleSpreadsheetInterface( object ):
     def read( self ):
         '''
         Read all of the information from a given sheet on a given spreadsheet. It will return this as a
-        pandas dataframe, and so every column should have a label as to its contents.
+        list of tuples, ordered according to the keys in the gspreadsheet. 
         '''
-        entries = collections.defaultdict(list)
-        for row in self.data:
-            for key in row.custom:
-                entries[ key ].append( row.custom[ key ].text )
-        worksheet = pd.DataFrame( entries )
-        return worksheet
+        return [ tuple([ row.custom[key].text for key in row.custom ]) for row in self.data ]
+
     def write( self, dataframe ):
         '''
         Takes in a pandas dataframe, and writes it to the google spreadsheet. This spreadsheet must already
@@ -62,36 +57,39 @@ class GoogleSpreadsheetInterface( object ):
         '''
         pass
 
-class TextSpreadsheetInterface( object ):
+class TextInterface( object ):
     '''
-    This is a wrapper for the pandas I/O, which has this covered already. Acceptable types to be read are
-    text files, csv files, and excel files (both 2003 .xls and 2007 .xlsx files). These are all text based
-    and so fit together. 
+    This allows connection to a text document, allowing any deliniation. 
+    '''
+    def __init__( self, file ):
+        self.file = file
+    def read( self, seperator=" " ):
+        '''
+        Read in a text document to a list of tuples. Seperator assumed if csv or tsv, but otherwise
+        needs to be provided if not space-seperated. 
+        '''
+        with open( self.file, 'r' ) as infile:
+            if self.file.endswith( ".csv" ):
+                seperator = ","
+            elif self.file.endswith( ".tsv" ):
+                seperator = "\t"
+            return [ tuple( line.strip("\r\n\t").split(seperator)) for line in infile ] 
 
-    Requires: pandas 
-    '''
-    def __init__( self, db ):
-        self.db = db
-    def read( self, sheet = 'Sheet1' ):
+    def write( self, data, seperator=" " ):
         '''
-        Read a text spreadsheet, based on the type of the document. Support currently avaliable for text,
-        csv files, and excel files.
+        Writes a series of data, in order, to the document. This will override any data in the
+        document.
         '''
-        if self.db.endswith( ".xls" ) or self.db.endswith( ".xlsx" ):
-            return pd.read_excel( self.db, sheet )
-        elif self.db.endswith( ".txt" ):
-            return pd.read_table( self.db )
-        elif self.db.endswith( ".csv" ):
-            return pd.read_csv( self.db )
-    def write( self, dataframe ):
-        '''
-        Write to a text spreadsheet using the methods from pandas. Support currently avaliable for excel
-        spreadsheets and csv files. 
-        '''
-        if self.db.endswith( ".xls" ) or self.db.endswith( ".xlsx" ):
-            dataframe.to_excel( self.db, sheet )
-        elif self.db.endswith( ".csv" ):
-            dataframe.to_csv( self.db )
+        assert hasattr( data, "__iter__" )
+        with open( self.file, 'w' ) as outfile:
+            if self.file.endswith( ".csv" ):
+                seperator = ","
+            elif self.file.endswith( ".tsv" ):
+                seperator = "\t"
+            if type(data[0] == str):
+                outfile.write( data )
+            else:
+                outfile.write( "\n".join( seperator.join( str(i) for i in entry ) for entry in data ) )
 
 class MySQLDatabaseInterface( object ):
     '''
@@ -113,30 +111,20 @@ class MySQLDatabaseInterface( object ):
             raise DatabaseError( "MySQL Error: Unable to execute statement '{}'".format(statement) )
         self.db.commit()
 
-    def read( self, query = None ):
-        if not query:
-            query = "SHOW TABLES"
-        data = pd.io.sql.read_frame( query, self.db )
-        return [ tuple( data.iloc[i] ) for i in xrange( len( data ) ) ]
-
-    def insert( self, table, dataframe ):
-        if isinstance( dataframe, pd.DataFrame ):
-            for i in xrange( len(dataframe) ):
-                self.insert( table, dataframe.iloc[i] )
-        dataframe = tuple( str(item) for item in dataframe )
+    def read( self, statement ):
         try:
-            self.cursor.execute( 'INSERT INTO {table} VALUES ( {vals} )'.format( table = table, vals = self._build_insert( dataframe ) ) )
+            self.cursor.execute( statement )
+            return self.cursor.fetchall()
+        except:
+            raise DatabaseError( "MySQL Error: Unable to execute statement '{}'".format(statement) )
+
+    def insert( self, table, data ):
+        try:
+            for row in data:
+                self.cursor.execute( 'INSERT INTO {table} VALUES ( {vals} )'.format( table = table, vals = self._build_insert( row ) ) )
             self.db.commit()
         except:
-            raise DatabaseError( "MySQL Error: Unable to add row ({row}) to table ({table})".format( row=dataframe, table=table ) )
-
-    def delete( self, table = None, query = None ):
-        if query:
-            self.cursor.execute( query )
-        elif table:
-            return
-            self.cursor.execute( "DROP TABLE {table}".format( table=table ) )
-        self.db.commit()
+            raise DatabaseError( "MySQL Error: Unable to add row ({row}) to table ({table})".format( row=row, table=table ) )
 
     def _build_insert( self, tuple ):
         return ','.join( [ '"{}"'.format( str(item).replace('"', '""').replace( "\\", "\\\\") ) 
@@ -172,7 +160,7 @@ def DatabaseFactory( db_type, **kwargs ):
         source: String describing where the query is coming from
         key: String present in the url of the spreadsheet of interest, after "/ccc?key=" until "#gid" in the url
     Text
-        db: Name of the text document to use
+        file: Name of the text document to use
     mysql
         db: Name of the database to use
         user: User name to connect with
@@ -182,6 +170,6 @@ def DatabaseFactory( db_type, **kwargs ):
     if db_type.lower() in GOOGLE_SPREADSHEET_TYPES:
         return GoogleSpreadsheetInterface( title = title, email = email, password = password, source = source, key = key, sheet = sheet )
     if db_type.lower() in TEXT_TABLE_TYPES:
-        return TextSpreadsheetInterface( db = db )
+        return TextInterface( file = file )
     if db_type.lower() == 'mysql':
         return MySQLDatabaseInterface( db = db, user = user, password = password, host = host )
