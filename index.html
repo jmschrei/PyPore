@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Pypore by jmschrei</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Pypore</h1>
+        <p>Tools used to analyze data from nanopore-based experiments.</p>
+
+        <p class="view"><a href="https://github.com/jmschrei/PyPore">View the Project on GitHub <small>jmschrei/PyPore</small></a></p>
+
+
+        <ul>
+          <li><a href="https://github.com/jmschrei/PyPore/zipball/master">Download <strong>ZIP File</strong></a></li>
+          <li><a href="https://github.com/jmschrei/PyPore/tarball/master">Download <strong>TAR Ball</strong></a></li>
+          <li><a href="https://github.com/jmschrei/PyPore">View On <strong>GitHub</strong></a></li>
+        </ul>
+      </header>
+      <section>
+        <h1>
+<a name="pypore" class="anchor" href="#pypore"><span class="octicon octicon-link"></span></a>PyPore</h1>
+
+<h2>
+<a name="analysis-of-nanopore-data" class="anchor" href="#analysis-of-nanopore-data"><span class="octicon octicon-link"></span></a><em>Analysis of Nanopore Data</em>
+</h2>
+
+<p>The PyPore package is based off of a few core data analysis packages in order to provide a consistent and easy framework for handling nanopore data in the UCSC nanopore lab. The packages it requires are:</p>
+
+<ul>
+<li>numpy</li>
+<li>scipy</li>
+<li>matplotlib</li>
+<li>sklearn</li>
+</ul><p>Packages which are not required, but can be used, are:</p>
+
+<ul>
+<li>mySQLdb</li>
+<li>cython</li>
+<li>PyQt4</li>
+</ul><p>Let's get started!</p>
+
+<h1>
+<a name="files" class="anchor" href="#files"><span class="octicon octicon-link"></span></a>Files</h1>
+
+<p>Nanopore data files consist primarily of current levels corresponding to ions passing freely through the nanopore ("open channel"), and a blockages as something passes through the pore, such as a DNA strand ("events"). Data from nanopore experiments are stored in Axon Binary Files (extension .abf), as a sequence 32 bit floats, and supporting information about the hardware. They can be opened and loaded with the following:</p>
+
+<pre><code>from PyPore.DataTypes import *
+file = File( "My_File.abf" ) 
+</code></pre>
+
+<p>The File class contains many methods to simplify the analysis of these files. The simplest analysis to do is to pull the events, or blockages of current, from the file, while ignoring open channel. Let's say that we are looking for any blockage of current which causes the current to dip from an open channel of ~120 pA. To be conservative, we set the threshold the current has to dip before being significant to 110 pA. This can be done simply with the file's parse method, which requires a parser class which will perform the parsing. The simplest event detector is the *lambda_event_parser, which has a keyword *threshold, indicating the raw current that serves as the threshold. </p>
+
+<pre><code>from PyPore.DataTypes import *
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+</code></pre>
+
+<p>The events are now stored as Event objects in file.events. The only other important file methods involve loading and saving them to a cache, which we'll cover later. Files also have the properties mean, std, and n (number of events). </p>
+
+<h1>
+<a name="events" class="anchor" href="#events"><span class="octicon octicon-link"></span></a>Events</h1>
+
+<p>Events are segments of current which correspond to something passing through the nanopore. We hope that it is something which we are interested in, such as DNA or protein. An event is usually made up of a sequence of discrete segments of current, which should correspond to reading some region of whatever is passing through. In the best case, each discrete segment in an event corresponds to a single nucleotide of DNA, or a single amino acid of a protein passing through.</p>
+
+<p>Events are often noisy, and transitions between them are quick, making filtering a good option for trying to see the underlying signal. Currently only <a href="http://en.wikipedia.org/wiki/Bessel_filter">bessel filters</a> are supported for filtering tasks, as they've been shown to perform very well.</p>
+
+<p>Let's continue with our example, and imagine that now we want to filter each event, and look at it! The filter method has two parameters, order and cutoff, defaulting to order=1 and cutoff=2000. (Note that we now import pyplot as well.)</p>
+
+<pre><code>from PyPore.DataTypes import *
+from matplotlib import pyplot as plt
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.plot()
+    plt.show()
+</code></pre>
+
+<p>The plot command will draw the event on whatever canvas you have, allowing you to make subplots with the events or add them into GUIs (such as Abada!), with the downside being that you need to use plt.show() after calling the plot command. The plot command wraps the pyplot.plot command, allowing you pass in any argument that could be used by pyplot.plot, for example:</p>
+
+<pre><code>event.plot( alpha=0.5, marker='o' ) 
+</code></pre>
+
+<p>The next step is usually to try to segment this event into it's discrete states. There are several segmenters which have been written to do this, of which currently *StatSplit is the best, written by Dr. Kevin Karplus and based on a recursive maximum likelihood algorithm.  This algorithm was sped up by rewritting it in Cython, leading to *SpeedyStatSplit, which is a python wrapper for the cython code. Segmenting an event is the same process as detecting events in a file, by using the parse method on an event and passing in a parser.</p>
+
+<p>Let's say that now we want to segment an event and view it. Using the same plot command for the event, we can specify to color by 'cycle', which colors the segments in a four-color cycle for easy viewing. SpeedyStatSplit takes in several parameters, of which *min_gain_per_sample is the most important, and 0.50 to 1.50 usually provide an adequate level to parse at, with higher numbers leading to less segments. </p>
+
+<pre><code>from PyPore.DataTypes import *
+from matplotlib import pyplot as plt
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.parse( parser=SpeedyStatSplit( min_gain_per_sample=0.50 ) )
+    event.plot( color='cycle' )
+    plt.show()
+</code></pre>
+
+<p>The last core functionality is the ability to apply an hidden markov model (HMM) to an event, and see which segments correspond to which hidden states. Any hmm (or more complex model!) can be used as long as it has a predict method (like sklearn hmms), but the PyPore.hmm module gives a core class, NanoporeHMM, and several examples, of how to make an hmm that will be useful. Let's say that we're dealing with an event that appears to switch between a high current state and a low current state, corresponding to a DNA strand ratcheting back and forth between two nucleotides. In order to try to group these segments, I've written an HMM named Bifurcator which will classify these segments as belonging to one group or the other. I want to visualize it's performance! </p>
+
+<pre><code>from PyPore.DataTypes import *
+from PyPore.hmm import Bifurcator
+from matplotlib import pyplot as plt
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.parse( parser=SpeedyStatSplit( min_gain_per_sample=0.50 ) )
+    event.apply_hmm( hmm=Bifurcator )
+    event.plot( color='hmm' )
+    plt.show()
+</code></pre>
+
+<p>You'll see that I had to import Bifurcator from the hmm module. By just using the event apply_hmm method, I can apply the hmm with minimal effort, and by coloring by 'hmm', segments will now be colored according to which hidden state in the HMM they correspond to. </p>
+
+<p>Event objects also have the properties start, end, duration, mean, std, and n (number of segments after segmentation has been performed). </p>
+
+<h1>
+<a name="segments" class="anchor" href="#segments"><span class="octicon octicon-link"></span></a>Segments</h1>
+
+<p>Segments are short sequences of current samples, usually which appear to be from the same distribution. They are the core place where data are stored, as usually an event is analyzed by the metadata stored in each state. Segments have the attributes current, which stores the raw current samples, in addition to mean, std, duration, start, end, min, and max. They do not have any core methods.</p>
+
+<p>If storing the raw sequence of current samples is too memory intensive, there are two ways to get rid of the current attribute. </p>
+
+<p>1) Initialize a MetaSegment object, instead of a Segment one, and feed in whatever statistics you'd like to save. This will prevent the current from ever being saved to a second object. For this example, lets assume you have a list of starts and ends of segments in an event, such as loading them from a cache.</p>
+
+<pre><code>event = Event( current=[...], start=..., file=... )
+event.segments =  [ MetaSegment( mean=np.mean( event.current[start:end] ),
+                                 std=np.std( event.current[start:end] ),
+                                 duration=(end-start)/100000 ) for start, end in zip( starts, ends ) ]
+</code></pre>
+
+<p>In this example, references to the current are not stored in both the event and the segment, which may save memory if you wish to not store the raw current after analyzing a file. The duration here is divided by 100,000 because abf files store 100,000 samples per second, and we wished to convert from the integer index of the start and end to the second index of the start and end.</p>
+
+<p>2) If you have the memory to store the references, but don't want to accumulate them past a single event, you can parse a file normally, and produce normal segments, then call the function to_meta() to turn them into MetaSegments. This does not require any calculation on the user part, but does require the segment have contained all current samples at one point.</p>
+
+<pre><code>event = Event( current=[...], start=..., file=... )
+event.parse( parser=SpeedyStatSplit() )
+for segment in event.segments:
+    segment.to_meta() 
+</code></pre>
+      </section>
+      <footer>
+        <p>This project is maintained by <a href="https://github.com/jmschrei">jmschrei</a></p>
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="javascripts/scale.fix.js"></script>
+    
+  </body>
+</html>
