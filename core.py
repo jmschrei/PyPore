@@ -9,18 +9,18 @@ import numpy as np
 import itertools as it
 import re
 import json
+from contextlib import contextmanager
 
 class MetaSegment( object ):
 	'''
-	The metadata on an abstract segment of ionic current. All information about a segment can be loaded,
-	without the expectation of the array of floats.
+	The metadata on an abstract segment of ionic current. All information about a segment can be 
+	loaded, without the expectation of the array of floats.
 	'''
 	def __init__( self, **kwargs ):
 		for key, value in kwargs.iteritems():
 			setattr( self, key, value )
 
 		if hasattr( self, "current" ):
-			print "herro"
 			self.n = self.current.shape[0]
 			self.mean = np.mean( self.current )
 			self.std = np.std( self.current )
@@ -28,11 +28,11 @@ class MetaSegment( object ):
 			self.max = np.max( self.current )
 			del self.current
 
-		if hasattr( self, "start" ) and hasattr( self, "end" ) and not hasattr( self, "duration" ):
+		if hasattr( self, "start" ) and hasattr( self, "end" ) and not hasattr(self, "duration" ):
 			self.duration = self.end - self.start
-		elif hasattr( self, "start" ) and hasattr( self, "duration" ) and not hasattr( self, "end" ):
+		elif hasattr( self, "start" ) and hasattr( self, "duration" ) and not hasattr(self, "end"):
 			self.end = self.start + self.duration
-		elif hasattr( self, "end" ) and hasattr( self, "duration" ) and not hasattr( self, "start" ):
+		elif hasattr( self, "end" ) and hasattr( self, "duration" ) and not hasattr(self, "start"):
 			self.start = self.end - self.duration
 
 	def __repr__( self ):
@@ -47,13 +47,18 @@ class MetaSegment( object ):
 	def to_meta( self ):
 		pass
 
-	def to_json( self, filename=None ):
+	def to_dict( self ):
 		keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration']
-		d = { i: getattr( self, i ) for i in self.__dict__.keys() + keys if hasattr( self, i ) }
+		d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
+		d['name'] = self.__class__.__name__
+		return d
+
+	def to_json( self, filename=None ):
+		_json = json.dumps( self.to_dict(), indent=4, separators=(',', ' : '))
 		if filename:
 			with open( filename, 'w' ) as outfile:
-				outfile.write( dict_to_json( d ) )
-		return dict_to_json( d )
+				outfile.write( _json )
+		return _json
 
 
 	@classmethod
@@ -120,20 +125,15 @@ class Segment( object ):
 
 	def to_meta( self ):
 		for key in ['mean', 'std', 'min', 'max', 'end', 'start', 'duration']:
-			try:
+			with ignored( KeyError, AttributeError ):
 				self.__dict__[ key ] = getattr( self, key )
-			except:
-				pass
-
 		del self.current 
 
 		self.__class__  = type( "MetaSegment", ( MetaSegment, ), self.__dict__ )
 
 	def delete( self ):
-		try:
+		with ignored( AttributeError ):
 			del self.current
-		except:
-			pass
 
 	@property
 	def mean( self ):
@@ -234,12 +234,14 @@ class Container( object ):
 		except:
 			raise AttributeError( "Attribute {} does not exist.".format( attr ) )
 
-def show( d, i=0 ):
-	if type(d) == dict:
-		for key, val in d.items():
-			print "\t"*i, type(key), type(val)
-			show(val, i=i+1)
-	elif type(d) == list:
-		for val in d:
-			print "\t"*i, type(val)
-			show(val, i=i+1)
+@contextmanager
+def ignored( *exceptions ):
+	'''
+	Replace the "try, except: pass" paradigm by replacing those three lines with a single line.
+	Taken from the latest 3.4 python update push by Raymond Hettinger, see:
+	http://hg.python.org/cpython/rev/406b47c64480
+	'''
+	try:
+		yield
+	except exceptions:
+		pass

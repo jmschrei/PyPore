@@ -1,40 +1,89 @@
 #!/usr/bin/env python
 # Contact: Jacob Schreiber
-#          jacobtribe@soe.ucsc.com
+#          jacobtribe@yahoo.com
 # hmm.py
 
 '''
-hmm.py contains several hidden markov models which can be used to classify
-current traces specific to nanopore data.
+This module allows for the extension of sklearn.hmm to be more applicable to reading nanopore
+traces. This means creating a wrapper for the GaussianHMM class which handles event objects,
+and allowing for scaling and clustering of ionic current levels in a specific way. This also
+defines several specific HMMs in a function which returns the built NanoporeHMM. 
 '''
 
 from sklearn.hmm import GaussianHMM, _BaseHMM
-from core import Segment
+from core import *
 import string
 import numpy as np
 
 class NanoporeHMM( GaussianHMM ):
+	'''
+	A wrapper for GaussianHMM, which makes it more specific for nanopore experiments. This involves
+	allowing for scaling (based on drift due to evaporation, or change in salt concentration), and
+	for clustering an event in a series of states defined by consecutive labels of the hidden
+	state, rather than a partitioner. 
+	'''
+
 	def scale( self, mult=None, add=None ):
+		'''
+		Scale the distribution of the Gaussian either multiplicatively or additively. 
+		'''
 		if mult:
 			self._means_ *= mult
 		if add:
 			self._means_ += add
-	def classify( self, event, algorithm = 'viterbi' ):
-		state_means = np.array( [ state.mean for state in event.states ] )
-		state_means.shape = ( state_means.shape[0], 1 )
-		_, state_sequence = self.decode( state_means, algorithm)
 
-		new_state_sequence = []
-		segments = [] 
+	def classify( self, event, algorithm = 'viterbi' ):
+		'''
+		Take an event which has been partitioned by a partitioner, and return a list of states
+		which have been reduced to the span of hidden states. For example, if you have the following:
+
+		A B C D E F G
+		X X X Y Y Z X
+
+		where A:G are observed segments in the event, and X:Z are hidden states defined in the HMM.
+		Running this method would return:
+
+		H I J K
+		X Y Z X
+
+		where H is a distribution that is the pdf addition of A B C, and I is the pdf addition of
+		D and E. 
+		'''
+
+		means = np.array([ seg.mean for seg in event.segments ])
+		means.shape = ( state_means.shape[0], 1 )
+
+		_, states = self.decode( means, algorithm )
+
+		reduced_segments, reduced_states = [], []
+
 		i, j = 0, 0
-		while i < len( state_sequence ) - 1:
+		while i < len( states ) - 1:
+			if states[i] != states[i+1]:
+				duration = np.sum([ seg.duration for seg in event.segments[j:i+1] ] )
+				mean = np.sum([  ])
+
 			if state_sequence[i] != state_sequence[i+1]:
-				current = event.current[ event.states[j].start: event.states[i].start + event.states[i].n ]
-				segments.append( Segment( start=event.states[j].start, current = current, 
-					                      event = event, second = event.file.second,
-					                      hidden_state = state_sequence[j]
-					                     ) )
-				new_state_sequence.append( state_sequence[j] )
+				duration = np.sum( [ seg.duration for seg in event.segments[j:i] ] )
+				mean = np.sum( [seg.mean*seg.duration for seg in event.segments[j:i]] ) / duration
+				std = np.sum([seg.std*seg.duration for seg in event.segments[j:i]]) / duration
+
+				if event.__class__.__name__ == "MetaEvent":
+					segments.append( MetaSegment( start=event.segments[j].start,
+												  duration=duration,
+												  mean=mean,
+												  std=std,
+												  event=event,
+												  second=event.file.second,
+												  hidden_state=state_sequence[j] ) )
+				else:
+					current = event.current[ event.segments[j].start: event.segments[i].start + event.segments[i].n ]
+					segments.append( Segment( start=event.segments[j].start, 
+											  current = current, 
+						                      event = event, second = event.file.second,
+						                      hidden_state = state_sequence[j]
+						                     ) )
+					new_state_sequence.append( state_sequence[j] )
 				j = i + 1
 			i += 1
 		return new_state_sequence, segments 

@@ -4,32 +4,40 @@
 # DataTypes.py
 
 '''
-DataTypes.py contains several classes meant to hold and organize common types of nanopore experimental data
-which originated from .abf files, organized from the top down as follows:
+DataTypes.py contains several classes meant to hold and organize common types of nanopore 
+experimental data. The most common usage involves creating a file from a .abf file, and then
+parsing it to get events, and then parsing those events to get segments. See following:
 
-Experiment(): A container for several files run in a single experiment. Calling the parse method on an
-              experiment will call the parse method of all files in it.
+from PyPore.DataTypes import *
 
-Sample(): A container for events which have all been classified as a single type. Only useful in experiments where
-          multiple types of events are useful to be stored, such as an experiment with multiple substrates.
+file = File( "my_data.abf" )
+file.parse( parser=lambda_event_parser() )
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.parse( parser=SpeedyStatSplit() )
 
-File(): A container which holds the raw current in a file. It is given the name of a file, and will automatically
-        find it and read it, assuming that it is stored on the Omar server ( omar.soe.ucsc.edu ). Its parse method
-        will use a specified parser (default to lambda parser) to detect events.
 
-Event(): A container for both the ionic current of a given event, and metadata, including a list of 'states' if
-         its parse method is called. Can take in any parse methods. 
+Experiment(): A container for several files run in a single experiment. Calling the parse method
+              on an experiment will call the parse method of all files in it.
 
-State(): A container for metadata of a specific 'state' that was parsed from an event.
+Sample(): A container for events which have all been classified as a single type. Only useful in 
+          experiments where multiple types of events are useful to be stored, such as an experiment
+          with multiple substrates.
+
+File(): A container which holds the raw current in a file. It is given the name of a file, and will
+        read it, pull the ionic current, and store it to the object.
+
+Event(): A container for both the ionic current of a given event, and metadata, including a list of
+         segments its parse method is called. 
 '''
 
 import numpy as np
-from read_abf import read_abf
+from read_abf import *
 from matplotlib import pyplot as plt
 from hmm import *
 from core import *
 from database import *
-import parsers
+from parsers import *
 from alignment import *
                  
 import json
@@ -43,12 +51,12 @@ class Event( Segment ):
     '''
     def __init__( self, current, start, file ):
         Segment.__init__( self, current, file=file, duration=current.shape[0]/file.second, 
-                          filtered=False, start =start/file.second, states=[], sample=None, n=0 )
+                          filtered=False, start =start/file.second, segments=[], sample=None, n=0 )
          
     def filter( self, order = 1, cutoff = 2000. ):
         '''
-        Performs a bessel filter on the selected data, normalizing the cutoff frequency by the nyquist
-        limit based on the sampling rate. 
+        Performs a bessel filter on the selected data, normalizing the cutoff frequency by the 
+        nyquist limit based on the sampling rate. 
         '''
         if type(self) != Event:
             raise TypeError( "Cannot filter a metaevent. Must have the current." )
@@ -60,48 +68,50 @@ class Event( Segment ):
         self.filter_order = order
         self.filter_cutoff = cutoff
 
-    def parse( self, parser = parsers.snakebase_parser( threshold = 1.5 ), filter = False ):
+    def parse( self, parser=SpeedyStatSplit( min_gain_per_sample=0.3 ), filter = False ):
         '''
-        Ensure that the data is filtered according to a bessel filter, and then applies a plug-n-play 
-        state parser which must contain a .parse method. 
+        Ensure that the data is filtered according to a bessel filter, and then applies a 
+        plug-n-play state parser which must contain a .parse method. 
         '''
         if type(self) != Event:
             raise TypeError( "Cannot parse a metaevent. Must have the current." )
         if self.filtered == False and filter:
             self.filter()
-        self.states = np.array( [ Segment( current=segment.current, start=segment.start, 
+        self.segments = np.array( [ Segment( current=segment.current, start=segment.start, 
                                            second=self.file.second, event=self ) for segment in parser.parse( self.current ) ] ) 
-        self.n = self.states.shape[0]
+        self.n = self.segments.shape[0]
         self.state_parser = parser
 
     def delete( self ):
-        try:
+        '''
+        Delete all data associated with itself, including making the call on all segments if they
+        exist, ensuring that all references get removed immediately.
+        '''
+        with ignored( AttributeError ):
             del self.current
-        except:
-            pass
-
-        try:
-            self.state_parser
-        except:
-            pass
-
-        for segment in self.states:
+        with ignored( AttributeError ):
+            del self.state_parser
+        for segment in self.segments:
             segment.delete()
         del self
 
     def apply_hmm( self, hmm ):
-        try:
-            segments = np.array([ state.mean for state in self.states ])
+        '''
+        Apply a hmm instance to the segments, and reduce the predict method of the hmm, which
+        for hmms defined in PyPore.hmm will be the hidden state identity for each segment.
+        '''
+        with ignored( AttributeError ):
+            segments = np.array([ seg.mean for seg in self.segments ])
             segments.shape = (segments.shape[0], 1)
-        except AttributeError:
-            return
-
         return hmm.predict( segments )
-                
+
     def plot( self, hmm=None, **kwargs ):
         '''
-        Plot the states in an event in a cycle of colors, to show where state detection occured at. 
+        Plot the segments, colored either according to a color cycle, or according to the colors
+        associated with the hidden states of a specific hmm passed in. Accepts all arguments that
+        pyplot.plot accepts, and passes them along.
         '''
+
         if hmm:
             hmm_seq = self.apply_hmm( hmm )
             if hasattr( hmm, 'colors' ):
@@ -137,7 +147,7 @@ class Event( Segment ):
             else:
                 plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
         else:
-            for c, segment in zip( color, self.states ):
+            for c, segment in zip( color, self.segments ):
                 if isinstance( segment, MetaSegment ):
                     x = ( segment.start, segment.duration+segment.start )
                     y_high = lambda z: segment.mean + z * segment.std
@@ -158,24 +168,20 @@ class Event( Segment ):
 
     def to_meta( self ):
         for prop in ['mean', 'std', 'duration', 'start', 'min', 'max', 'end', 'start']:
-            try:
+            with ignored( AttributeError, KeyError ):
                 self.__dict__[prop] = getattr( self, prop )
-            except:
-                pass
 
-        try:
+        with ignored( AttributeError ):
             del self.current
-        except:
-            pass
 
-        for segment in self.states:
+        for segment in self.segments:
             segment.to_meta()
 
         self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
 
     def to_dict( self ):
         keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration', 'filtered', 
-                'filter_order', 'filter_cutoff', 'n', 'state_parser', 'states' ]
+                'filter_order', 'filter_cutoff', 'n', 'state_parser', 'segments' ]
         d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
         d['name'] = self.__class__.__name__
         return d
@@ -183,15 +189,11 @@ class Event( Segment ):
     def to_json( self, filename=None ):
         d = self.to_dict()
 
-        try:
-            d['states'] = [ seg.to_dict() for seg in d['states'] ]
-        except:
-            pass
+        with ignored( KeyError, AttributeError ):
+            d['segments'] = [ seg.to_dict() for seg in d['segments'] ]
 
-        try:
+        with ignored( KeyError, AttributeError ):
             d['state_parser'] = d['state_parser'].to_dict()
-        except:
-            pass
 
         _json = json.dumps( d, indent=4, separators=( ',', ' : ' ) )
         if filename:
@@ -200,7 +202,7 @@ class Event( Segment ):
         return _json
 
     @classmethod
-    def from_json( self, _json ) :
+    def from_json( cls, _json ) :
         if _json.endswith( ".json" ):
             with open( _json, 'r' ) as infile:
                 _json = ''.join(line for line in infile)
@@ -213,23 +215,21 @@ class Event( Segment ):
         else:
             event = Event( d['current'], d['start'], )
 
-        
-
     @classmethod
-    def from_segments( self, *segments ):
+    def from_segments( cls, *segments ):
         try:
             current = np.concatenate( [seg.current for seg in segments] )
-            Segment.__init__( self, current=current, states=segments, sample=None, n=len(segments) )
+            Segment.__init__( self, current=current, segments=segments, sample=None, n=len(segments) )
         except AttributeError:
             dur = sum( seg.duration for seg in segments )
             mean = np.mean( seg.mean*seg.duration for seg in segments ) / dur
             std = np.sqrt( sum( seg.std ** 2 * seg.duration ) / dur )  
-            MetaSegment.__init__( self, states=segments, sample=None, n=len(segments),
+            MetaSegment.__init__( self, segments=segments, sample=None, n=len(segments),
                                   duration=dur, mean=mean, std=std )
-            self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
+            self.__class__ = type( "MetaEvent", (Event,), cls.__dict__ )
 
     @classmethod
-    def from_database( self, database, host, password, user, AnalysisID, SerialID ):
+    def from_database( cls, database, host, password, user, AnalysisID, SerialID ):
         db = MySQLDatabaseInterface(db=database, host=host, password=password, user=user)
 
         EventID, start, end = db.read( "SELECT ID, start, end FROM Events \
@@ -239,11 +239,10 @@ class Event( Segment ):
         state_query = np.array( db.read( "SELECT start, end, mean, std FROM Segments \
                                           WHERE EventID = {}".format(EventID) ) )
         
-        states = [ MetaSegment( start=start, end=end, mean=mean, 
-                                std=std, duration=end-start ) for start, end, mean, std in state_query ]
+        segments = [ MetaSegment( start=start, end=end, mean=mean, 
+                                  std=std, duration=end-start ) for start, end, mean, std in state_query ]
 
-        Event.from_segments( self, states )
-
+        Event.from_segments( cls, segments )
 
 class File( Segment ):
     '''
@@ -258,7 +257,7 @@ class File( Segment ):
     def __getitem__( self, index ):
         return self.events[ index ]
 
-    def parse( self, parser = parsers.lambda_event_parser( threshold=90 ) ):
+    def parse( self, parser = lambda_event_parser( threshold=90 ) ):
         '''
         Applies one of the plug-n-play event parsers for event detection. The parser must have a .parse method
         which returns a tuple corresponding to the 
@@ -270,25 +269,28 @@ class File( Segment ):
         del self.current
 
     def delete( self ):
-        try:
+        '''
+        Delete the file, and everything that is a part of it, including the ionic current stored
+        to it, other properties, and all events. Calls delete on all events to remove them and all
+        underlying data. 
+        '''
+        with ignored( AttributeError ):
             del self.current
-        except:
-            pass
 
-        try:
+        with ignored( AttributeError ):
             del self.event_parser
-        except:
-            pass
 
         for event in self.events:
             event.delete()
         del self
 
     def to_meta( self ):
-        try:
+        '''
+        Remove the ionic current stored for this file, and do the same for all underlying
+        structures in order to remove all references to that list. 
+        '''
+        with ignored( AttributeError ):
             del self.current
-        except:
-            pass
 
         for event in self.events:
             event.to_meta()
@@ -296,23 +298,34 @@ class File( Segment ):
         self.__class__ = type( "MetaFile", (File,), self.__dict__ )
 
     def to_dict( self ):
+        '''
+        Return a dictionary of the important data that underlies this file. This is done with the
+        intention of producing a json from it. 
+        '''
         keys = [ 'filename', 'n', 'event_parser', 'mean', 'std', 'duration', 'start', 'end', 'events' ]
         d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
         d['name'] = self.__class__.__name__
         return d
 
     def to_json( self, filename=None ):
+        '''
+        Return a json (in the form of a string) that represents the file, and allows for
+        reconstruction of the instance from, using cls.from_json. 
+        '''
         d = self.to_dict()
 
         devents = []
         for event in d['events']:
             devent = event.to_dict()
             try:
-                devent['states'] = [ state.to_dict() for state in devent['states'] ]
+                devent['segments'] = [ state.to_dict() for state in devent['segments'] ]
                 devent['state_parser'] = devent['state_parser'].to_dict()
             except:
-                pass
+                with ignored( KeyError, AttributeError )
+                    del devent['segments']
+                    del devent['state_parser']
             devents.append( devent )
+
         d['events'] = devents
         d['event_parser'] = d['event_parser'].to_dict()
 
@@ -324,7 +337,12 @@ class File( Segment ):
         return _json
 
     @classmethod
-    def from_json( self, _json ):
+    def from_json( cls, _json ):
+        '''
+        Read in a json (string format) and produce a file instance and all associated event
+        instances. 
+        '''
+
         if _json.endswith(".json"):
             with open( _json, 'r' ) as infile:
                 _json = ''.join(line for line in infile)
@@ -343,13 +361,12 @@ class File( Segment ):
 
             event = Event( current=file.current[ s:e ], start=s, file=file )
 
-            if _json['filtered']: # FIX HERE !!!!
+            if _json['filtered']:
                 event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
 
-
-            event.states = [ Segment( current=file.current[ s+s_json['start']*file.second : s+s_json['end']*file.second ],
-                                      second=file.second, event=event, start=s_json['start']*file.second )
-                                                                for s_json in _json['states'] ]
+            event.segments = [ Segment( current=event.current[ s_json['start']*file.second : s_json['end']*file.second ],
+                                        second=file.second, event=event, start=s_json['start']*file.second )
+                                                                for s_json in _json['segments'] ]
             event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
             event.n = _json['n']
             event.filtered = _json['filtered']
@@ -360,9 +377,9 @@ class File( Segment ):
         return file
 
     @classmethod 
-    def from_database( self, database, host, password, user, AnalysisID=None, filename=None,
-                       eventDetector=None, eventDetectorParams=None, stateDetector=None,
-                       stateDetectorParams=None, filterCutoff=None, filterOrder=None  ):
+    def from_database( cls, database, host, password, user, AnalysisID=None, filename=None,
+                       eventDetector=None, eventDetectorParams=None, segmenter=None,
+                       segmenterParams=None, filterCutoff=None, filterOrder=None  ):
         '''
         Loads the cache for the file, if this exists. Can either provide the AnalysisID to unambiguously
         know which analysis to use, or the filename if you want the most recent analysis done on that file.
@@ -370,9 +387,9 @@ class File( Segment ):
         db = MySQLDatabaseInterface(db=database, host=host, password=password, user=user)
 
         keys = ( "ID", "Filename", "EventDetector", "EventDetectorParams",
-                 "StateDetector", "StateDetectorParams", "FilterCutoff", "FilterOrder" )
-        vals = ( AnalysisID, filename, eventDetector, eventDetectorParams, stateDetector,
-                 stateDetectorParams, filterCutoff, filterOrder )
+                 "segmenter", "segmenterParams", "FilterCutoff", "FilterOrder" )
+        vals = ( AnalysisID, filename, eventDetector, eventDetectorParams, segmenter,
+                 segmenterParams, filterCutoff, filterOrder )
 
         query_list = []
         for key, val in zip( keys, vals ):
@@ -398,16 +415,14 @@ class File( Segment ):
                                     WHERE AnalysisID = {0}".format(AnalysisID) ) )
         EventID, SerialID, starts, ends = query[:, 0], query[:, 1], query[:, 2], query[:,3]
         
-        file.parse( parser=parsers.MemoryParse( starts, ends ) )
+        file.parse( parser=MemoryParse( starts, ends ) )
 
         for i in SerialID:
             state_query = np.array( db.read( "SELECT start, end FROM Segments \
                                               WHERE EventID = {}".format(EventID[i]) ) )
-            try:
+            with ignored( IndexError ):
                 starts, ends = state_query[:,0], state_query[:,1]
-                file.events[i].parse( parser=parsers.MemoryParse( starts, ends ) )
-            except IndexError:
-                pass
+                file.events[i].parse( parser=MemoryParse( starts, ends ) )
         
         return file
 
@@ -449,7 +464,7 @@ class File( Segment ):
             prevAnalysisID = db.read( "SELECT ID FROM AnalysisMetadata \
                                        WHERE Filename = '{0}' \
                                            AND EventDetector = '{1}' \
-                                           AND StateDetector = '{2}'".format( self.filename,
+                                           AND segmenter = '{2}'".format( self.filename,
                                                                             event_parser_name,
                                                                             state_parser_name ) )[0][0]
         except IndexError:
@@ -483,26 +498,28 @@ class File( Segment ):
                                                              i 
                                                             ) ) [-1][-1]
 
-            for j, state in enumerate( event.states ):
+            for j, seg in enumerate( event.segments ):
                 values = "VALUES ({0},{1},{2},{3},{4},{5})".format( int(event_id), 
                                                                     j, 
-                                                                    state.start*100000, 
-                                                                    state.end*100000,
-                                                                    state.mean,
-                                                                    state.std,
+                                                                    seg.start*100000, 
+                                                                    seg.end*100000,
+                                                                    seg.mean,
+                                                                    seg.std,
                                                                    ) 
                 db.execute( "INSERT INTO Segments " + values )
 
 
 class Experiment( Container ):
-    def __init__( self, samples=[], files=[], events=[], states=[] ):
-        Container.__init__( self, samples=samples, files=files, events=events, states=states, event_count=len(events) )
-    def parse( self, parser = parsers.lambda_event_parser( threshold=90 ) ):
+    def __init__( self, samples=[], files=[], events=[], segments=[] ):
+        Container.__init__( self, samples=samples, files=files, events=events, segments=segments, event_count=len(events) )
+
+    def parse( self, parser=lambda_event_parser( threshold=90 ) ):
         for file in self.files:
             file.parse( parser=parser )
             self.event_count += file.n
             self.add( file.events )
-            self.add( file.states )
+            self.add( file.segments )
+
     def apply_hmm( self, hmm, filter=None, indices=None ):
         segments = []
         hmm = hmm_factory[ hmm ]
@@ -510,16 +527,13 @@ class Experiment( Container ):
             _, segs = hmm.classify( event )
             segments = np.concatenate( ( segments, segs ) )
         return segments
-    def delete( self ):
-        try:
-            del self.events
-        except AttributeError:
-            pass
 
-        try:
-            del self.states
-        except AttributeError:
-            pass
+    def delete( self ):
+        with ignored( AttributeError ):
+            del self.events
+
+        with ignored( AttributeError ):
+            del self.segments
 
         for sample in self.samples:
             sample.delete()
@@ -533,9 +547,12 @@ class Sample( Container ):
         self.events = []
         self.files = [] 
         self.label = label
+
     def delete( self ):
-        for file in self.files:
-            file.delete()
+        with ignored( AttributeError ):
+            for file in self.files:
+                file.delete()
+
         for event in self.events:
             event.delete()
         del self.events
@@ -611,9 +628,9 @@ class MultipleEventAlignment( object ):
                 plt.plot( time_steps, seg_values, color='rgbmyk'[i%6], linewidth=2, alpha=0.5 )
         
         model = self.events[self.model_id]
-        time = [ seg.start for seg in model.states ] + [ model.states[-1].start + model.states[-1].duration ]
+        time = [ seg.start for seg in model.segments ] + [ model.segments[-1].start + model.segments[-1].duration ]
         time_steps = [ t for t in flatten(pairwise(time))]
-        seg_values = [ v for v in flatten( (seg.mean, seg.mean) for seg in model.states ) ]
+        seg_values = [ v for v in flatten( (seg.mean, seg.mean) for seg in model.segments ) ]
         plt.plot( time_steps, seg_values, color='c', linewidth=5, alpha=0.4 )
         
         plt.xlim(0,model.duration)
