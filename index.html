@@ -89,6 +89,8 @@ for event in file.events:
     plt.show()
 </code></pre>
 
+<p>Currently, <em>lambda</em>event_parser( threshold )_ and <em>MemoryParse( starts, ends )</em> are the only two parsers. MemoryParse takes in two lists, one of starts of events, and one of ends of events, and will cut a file into it's respective events. This is useful if you've done an analysis before and remember where the split points are. </p>
+
 <p>The plot command will draw the event on whatever canvas you have, allowing you to make subplots with the events or add them into GUIs (such as Abada!), with the downside being that you need to use plt.show() after calling the plot command. The plot command wraps the pyplot.plot command, allowing you pass in any argument that could be used by pyplot.plot, for example:</p>
 
 <pre><code>event.plot( alpha=0.5, marker='o' ) 
@@ -110,6 +112,10 @@ for event in file.events:
     event.plot( color='cycle' )
     plt.show()
 </code></pre>
+
+<p>Currently, the parsers implemented for segmentation are <em>SpeedyStatSplit( min</em>width, max_width, min_gain_per_sample, window_width, use_log, splitter)<em>, _StatSplit( <em>same as before</em> )</em>, <em>snakebase\</em>parser( threshold, merger_thresh )<em>, and _novakker\</em>parser( low_thresh, high_thresh, merger_thresh )_. SpeedyStatSplit is the cython implementation of the StatSplit code. Snakebase parser will segment whenever the distance between two adjacent local optima of the wave is above a threshold. The novakker parser will split whenever the derivative of the current is above a high threshold, and has passed below the low threshold since the last split. </p>
+
+<p>However, both Files and Events inherit from the Segment class, described below. This means that any of the parsers will work on either files or events, as long as they have an underlying .current attribute. </p>
 
 <p>The last core functionality is the ability to apply an hidden markov model (HMM) to an event, and see which segments correspond to which hidden states. Any hmm (or more complex model!) can be used as long as it has a predict method (like sklearn hmms), but the PyPore.hmm module gives a core class, NanoporeHMM, and several examples, of how to make an hmm that will be useful. Let's say that we're dealing with an event that appears to switch between a high current state and a low current state, corresponding to a DNA strand ratcheting back and forth between two nucleotides. In order to try to group these segments, I've written an HMM named Bifurcator which will classify these segments as belonging to one group or the other. I want to visualize it's performance! </p>
 
@@ -156,6 +162,117 @@ event.parse( parser=SpeedyStatSplit() )
 for segment in event.segments:
     segment.to_meta() 
 </code></pre>
+
+<h1>
+<a name="saving-analyses" class="anchor" href="#saving-analyses"><span class="octicon octicon-link"></span></a>Saving Analyses</h1>
+
+<p>If you perform an analysis and wish to save the results, there are multiple ways for you to do such. These operation seems common, for applications such as testing a HMM. If you write a HMM and want to make modifications to it, it would be useful to not have to redo the segmentation, but instead simply load up the same segmentation from the last time you did it. Alternatively, you may have a large batch of files you wish to analyze, and want to grab the metadata for each file to easily read after you go eat lunch, so you don't need to deal with the whole files.</p>
+
+<h2>
+<a name="mysql-database" class="anchor" href="#mysql-database"><span class="octicon octicon-link"></span></a>MySQL Database:</h2>
+
+<p>The first is to store it to a MySQL database. The tables must be properly made for this-- see database.py if you want to see how to set up your own database to store PyPore results. If you are connected to the UCSC SoE secure network, there is a MySQL database, named chenoo, which will allow you to store an analysis. This is done on the file level, in order to preserve RDBMS format. </p>
+
+<pre><code>from PyPore.DataTypes import *
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.parse( parser=SpeedyStatSplit( min_gain_per_sample=0.50 ) )
+    event.plot( color='cycle' )
+    plt.show()
+file.to_database( database="chenoo", host="...", password="...", user="..." )
+</code></pre>
+
+<p>Host, password, and user must be set for your specific database. These files can then be read back by the following code.</p>
+
+<p>'''
+from PyPore.DataTypes import *</p>
+
+<p>file = File.from_database( database="chenoo", host="...", password="...", user="...", AnalysisID, filename, eventDetector, eventDetectorParams, segmenter, segmenterParams, filterCutoff, filterOrder )</p>
+
+<p>'''</p>
+
+<p>This will load the file back, with the previous segmentations. This will be anywhere from 10x to 1000x faster than performing the segmentation again. The time depends on how stable your connection with the database is, and how complex the analysis you did was. </p>
+
+<p>Now, it seems like there are a lot of parameters after user! You need to fill in as many of these as you can, to help identify which analysis you meant. AnalysisID is a primary key, but is also assigned by the database automatically when you stored it, so it is possible you do not know it. If you connect to MySQL independently and look up that ID, you can use it solely to identify which file you meant. If you do not provide enough information to uniquely identify a file, you may get an incorrect analysis.</p>
+
+<h2>
+<a name="json-file" class="anchor" href="#json-file"><span class="octicon octicon-link"></span></a>JSON File</h2>
+
+<p>A more portable and simple way to store analyses is to save the file to a json. This can be done simply with the following code.</p>
+
+<pre><code>from PyPore.DataTypes import *
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+
+for event in file.events:
+    event.filter( order=1, cutoff=2000 )
+    event.parse( parser=SpeedyStatSplit( min_gain_per_sample=0.50 ) )
+    event.plot( color='cycle' )
+    plt.show()
+file.to_json( filename="My_File.json" )
+</code></pre>
+
+<p>The representation of your analysis will then be available as a human-readable json format. It may not be particularly fun to look at, but you will be able to read the metadata from the file. A snippet from an example file looks like the following:</p>
+
+<p>{
+     "name" : "File",
+     "n" : 16,
+     "event_parser" : {
+         "threshold" : 50.0,
+         "name" : "lambda_event_parser"
+     },
+     "duration" : 750.0,
+     "filename" : "13823006-s06",
+     "events" : [
+         {
+             "std" : 1.9335278997265508,
+             "end" : 31.26803,
+             "state_parser" : {
+                 "min_gain_per_sample" : 0.5,
+                 "min_width" : 1000,
+                 "window_width" : 10000,
+                 "max_width" : 1000000,
+                 "name" : "SpeedyStatSplit"
+             },
+             "name" : "Event",
+             "min" : 16.508111959669066,
+             "max" : 48.73997069621818,
+             "segments" : [
+                 {
+                     "std" : 2.8403093295527646,
+                     "end" : 0.01,
+                     "name" : "Segment",
+                     "min" : 22.330505378907066,
+                     "max" : 48.73997069621818,
+                     "start" : 0.0,
+                     "duration" : 0.01,
+                     "mean" : 27.341223956001969
+                 },
+                 {
+                     "std" : 0.5643329015609988,
+                     "end" : 2.5060499999999997,
+                     "name" : "Segment",
+                     "min" : 17.67660726490438,
+                     "max" : 26.554361458946911,
+                     "start" : 0.01,
+                     "duration" : 2.49605,
+                     "mean" : 24.084380592526145
+                ....</p>
+
+<p>The file continues to list every event, and every segment in every event. The code to reconstruct an analysis from a json file is just as long as the code to reconstruct from the database.</p>
+
+<p>'''
+from PyPore.DataTypes import *</p>
+
+<p>file = File.from_json( "My_File.json" )
+'''</p>
+
+<p>This is usually faster than loading from a database, solely due to not having to connect across a network and stream data, and instead reading locally. </p>
       </section>
       <footer>
         <p>This project is maintained by <a href="https://github.com/jmschrei">jmschrei</a></p>
