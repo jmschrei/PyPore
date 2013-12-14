@@ -321,7 +321,7 @@ class File( Segment ):
                 devent['segments'] = [ state.to_dict() for state in devent['segments'] ]
                 devent['state_parser'] = devent['state_parser'].to_dict()
             except:
-                with ignored( KeyError, AttributeError )
+                with ignored( KeyError, AttributeError ):
                     del devent['segments']
                     del devent['state_parser']
             devents.append( devent )
