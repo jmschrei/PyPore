@@ -16,7 +16,9 @@ Packages which are not required, but can be used, are:
 
 Let's get started!
 
-# Files
+# DataTypes
+
+## Files
 
 Nanopore data files consist primarily of current levels corresponding to ions passing freely through the nanopore ("open channel"), and a blockages as something passes through the pore, such as a DNA strand ("events"). Data from nanopore experiments are stored in Axon Binary Files (extension .abf), as a sequence 32 bit floats, and supporting information about the hardware. They can be opened and loaded with the following:
 
@@ -25,7 +27,7 @@ from PyPore.DataTypes import *
 file = File( "My_File.abf" ) 
 ```
 
-The File class contains many methods to simplify the analysis of these files. The simplest analysis to do is to pull the events, or blockages of current, from the file, while ignoring open channel. Let's say that we are looking for any blockage of current which causes the current to dip from an open channel of ~120 pA. To be conservative, we set the threshold the current has to dip before being significant to 110 pA. This can be done simply with the file's parse method, which requires a parser class which will perform the parsing. The simplest event detector is the *lambda_event_parser, which has a keyword *threshold, indicating the raw current that serves as the threshold. 
+The File class contains many methods to simplify the analysis of these files. The simplest analysis to do is to pull the events, or blockages of current, from the file, while ignoring open channel. Let's say that we are looking for any blockage of current which causes the current to dip from an open channel of ~120 pA. To be conservative, we set the threshold the current has to dip before being significant to 110 pA. This can be done simply with the file's parse method, which requires a parser class which will perform the parsing. The simplest event detector is the *lambda_event_parser*, which has a keyword *threshold*, indicating the raw current that serves as the threshold. 
 
 ```
 from PyPore.DataTypes import *
@@ -35,7 +37,7 @@ file.parse( parser=lambda_event_parser( threshold=110 ) )
 
 The events are now stored as Event objects in file.events. The only other important file methods involve loading and saving them to a cache, which we'll cover later. Files also have the properties mean, std, and n (number of events). 
 
-# Events
+## Events
 
 Events are segments of current which correspond to something passing through the nanopore. We hope that it is something which we are interested in, such as DNA or protein. An event is usually made up of a sequence of discrete segments of current, which should correspond to reading some region of whatever is passing through. In the best case, each discrete segment in an event corresponds to a single nucleotide of DNA, or a single amino acid of a protein passing through.
 
@@ -56,7 +58,7 @@ for event in file.events:
     plt.show()
 ```
 
-Currently, _lambda_event_parser( threshold )_ and _MemoryParse( starts, ends )_ are the only two parsers. MemoryParse takes in two lists, one of starts of events, and one of ends of events, and will cut a file into it's respective events. This is useful if you've done an analysis before and remember where the split points are. 
+Currently, *lambda_event_parser* and *MemoryParse* are the most used File parsers. MemoryParse takes in two lists, one of starts of events, and one of ends of events, and will cut a file into it's respective events. This is useful if you've done an analysis before and remember where the split points are. 
 
 The plot command will draw the event on whatever canvas you have, allowing you to make subplots with the events or add them into GUIs (such as Abada!), with the downside being that you need to use plt.show() after calling the plot command. The plot command wraps the pyplot.plot command, allowing you pass in any argument that could be used by pyplot.plot, for example:
 
@@ -82,9 +84,7 @@ for event in file.events:
     plt.show()
 ```
 
-Currently, the parsers implemented for segmentation are _SpeedyStatSplit( min_width, max_width, min_gain_per_sample, window_width, use_log, splitter)_, _StatSplit( *same as before* )_, _snakebase\_parser( threshold, merger_thresh )_, and _novakker\_parser( low_thresh, high_thresh, merger_thresh )_. SpeedyStatSplit is the cython implementation of the StatSplit code. Snakebase parser will segment whenever the distance between two adjacent local optima of the wave is above a threshold. The novakker parser will split whenever the derivative of the current is above a high threshold, and has passed below the low threshold since the last split. 
-
-However, both Files and Events inherit from the Segment class, described below. This means that any of the parsers will work on either files or events, as long as they have an underlying .current attribute. 
+The most reliable segmenter currently is *SpeedyStatSplit*. For more documentation on the parsers, see the parsers segment of this documentation. Both Files and Events inherit from the Segment class, described below. This means that any of the parsers will work on either files or events.
 
 The last core functionality is the ability to apply an hidden markov model (HMM) to an event, and see which segments correspond to which hidden states. Any hmm (or more complex model!) can be used as long as it has a predict method (like sklearn hmms), but the PyPore.hmm module gives a core class, NanoporeHMM, and several examples, of how to make an hmm that will be useful. Let's say that we're dealing with an event that appears to switch between a high current state and a low current state, corresponding to a DNA strand ratcheting back and forth between two nucleotides. In order to try to group these segments, I've written an HMM named Bifurcator which will classify these segments as belonging to one group or the other. I want to visualize it's performance! 
 
@@ -108,7 +108,9 @@ You'll see that I had to import Bifurcator from the hmm module. By just using th
 
 Event objects also have the properties start, end, duration, mean, std, and n (number of segments after segmentation has been performed). 
 
-# Segments
+## Segments
+
+A segment stores the series of floats in a given range of ionic current. This abstract notion allows for both Event and File to inherit from it, as both a file and an event are a range of floats. The context in which you will most likely interact with a Segment is in representing a discrete step of the biopolymer through the pore, with points usually coming from the same distribution. 
 
 Segments are short sequences of current samples, usually which appear to be from the same distribution. They are the core place where data are stored, as usually an event is analyzed by the metadata stored in each state. Segments have the attributes current, which stores the raw current samples, in addition to mean, std, duration, start, end, min, and max. They do not have any core methods.
 
@@ -134,6 +136,30 @@ for segment in event.segments:
     segment.to_meta() 
 ```
 
+# Parsers
+
+Given that both Events and Files inherit from the Segment class, any parser can be used on both Events and Files. However, some were written for the express purpose of event detection or segmentation, and are better suited for that task.
+
+## Event Detector Intended Parsers
+
+These parsers were intended to be use for event detection. They include:
+
+* *lambda_event_parser( threshold )* : This parser will define an event to be any consecutive points of ionic current between a drop below threshold to a jump above the threshold. This is a very simplistic parser, built on the idea that the difference between open channel current and the highest biopolymer related state in ~30-40% of open channel, meaning that setting this threshold anywhere in that range will quickly yield the events.
+
+## Segmenter Intended Parsers
+
+* *SpeedyStatSplit( min_gain_per_sample, min_width, max_width, window_width, use_log )* : This parser uses maximum likelihood in order to split segments. This is the current best segmenter, as it can handle segments which have different variances but the same mean, and segments with very similar means. It is the cython implementation of StatSplit, speeding up the implementation ~40x. The min gain per sample attribute is the most important one, with ~0.5 being a good default, and higher numbers producing less segments, smaller numbers producing more segments. The min width and max width parameters are in points, and their default values are usually good. 
+
+* *StatSplit( ... )* : The same as SpeedyStatSplit, except slower. Use if masochistic. 
+
+* *novakker_parser( low_thresh, high_thresh )* : This is an implementation of the derivative part of a  filter-derivative method to segmentation. It has two thresholds on the derivative, of which the high thresh must be reached before a segmentation is made. However, before the next segmentation is made, the derivative must go below the low threshold. This ensures that a region of rapid change does not get overly segmented. 
+
+* *snakebase_parser( threshold )* : This parser takes the attitude that transitions between segments occurs when the peak-to-peak amplitude between two consecutive waves is higher than threshold. This method seems to work decently when segments have significantly different means, especially when over-segmenting is not a problem.
+
+## Misc.
+
+* *MemoryParser( starts, ends )* : This parser is mostly used internally in order to load up saved analyses, however it is available for all to use. The starts of segments, and the ends, are provided in a list with the *i*-th element of starts and ends correspond to the *i*-th segment you wish to make. This can be used for event detection or segmentation.
+
 # Saving Analyses
 
 If you perform an analysis and wish to save the results, there are multiple ways for you to do such. These operation seems common, for applications such as testing a HMM. If you write a HMM and want to make modifications to it, it would be useful to not have to redo the segmentation, but instead simply load up the same segmentation from the last time you did it. Alternatively, you may have a large batch of files you wish to analyze, and want to grab the metadata for each file to easily read after you go eat lunch, so you don't need to deal with the whole files.
@@ -157,12 +183,11 @@ file.to_database( database="chenoo", host="...", password="...", user="..." )
 
 Host, password, and user must be set for your specific database. These files can then be read back by the following code.
 
-'''
+```
 from PyPore.DataTypes import *
 
 file = File.from_database( database="chenoo", host="...", password="...", user="...", AnalysisID, filename, eventDetector, eventDetectorParams, segmenter, segmenterParams, filterCutoff, filterOrder )
-
-'''
+```
 
 This will load the file back, with the previous segmentations. This will be anywhere from 10x to 1000x faster than performing the segmentation again. The time depends on how stable your connection with the database is, and how complex the analysis you did was. 
 
@@ -234,10 +259,10 @@ The representation of your analysis will then be available as a human-readable j
 
 The file continues to list every event, and every segment in every event. The code to reconstruct an analysis from a json file is just as long as the code to reconstruct from the database.
 
-'''
+```
 from PyPore.DataTypes import *
 
 file = File.from_json( "My_File.json" )
-'''
+```
 
 This is usually faster than loading from a database, solely due to not having to connect across a network and stream data, and instead reading locally. 
