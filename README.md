@@ -22,9 +22,9 @@ There are several core datatypes implemented in order to speed up analysis. Thes
 
 ### Files
 
-* Attributes: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
-* Instance Methods: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password )
-* Class Methods: from\_json( filename ), from\_database( ... )  
+* **Attributes: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
+* **Instance Methods**: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password )
+* **Class Methods**: from\_json( filename ), from\_database( ... )  
 
 Nanopore data files consist primarily of current levels corresponding to ions passing freely through the nanopore ("open channel"), and a blockages as something passes through the pore, such as a DNA strand ("events"). Data from nanopore experiments are stored in Axon Binary Files (extension .abf), as a sequence 32 bit floats, and supporting information about the hardware. They can be opened and loaded with the following:
 
@@ -45,9 +45,9 @@ The events are now stored as Event objects in file.events. The only other import
 
 ### Events
 
-* Attributes: duration, start, end, mean, std, min, max, n, current, sample, segments, state\_parser, filtered, filter\_order, filter\_cutoff
-* Instance Methods: filter( order, cutoff ), parse( parser ), delete(), apply\_hmm( hmm ), plot( [hmm, kwargs), to\_meta(), to\_dict(), to\_json()
-* Class Methods: from\_json( filename ), from\_database( ... ), from\_segments( segments )  
+* **Attributes**: duration, start, end, mean, std, min, max, n, current, sample, segments, state\_parser, filtered, filter\_order, filter\_cutoff
+* **Instance Methods**: filter( order, cutoff ), parse( parser ), delete(), apply\_hmm( hmm ), plot( [hmm, kwargs), to\_meta(), to\_dict(), to\_json()
+* **Class Methods**: from\_json( filename ), from\_database( ... ), from\_segments( segments )  
 
 Events are segments of current which correspond to something passing through the nanopore. We hope that it is something which we are interested in, such as DNA or protein. An event is usually made up of a sequence of discrete segments of current, which should correspond to reading some region of whatever is passing through. In the best case, each discrete segment in an event corresponds to a single nucleotide of DNA, or a single amino acid of a protein passing through.
 
@@ -120,9 +120,9 @@ Event objects also have the properties start, end, duration, mean, std, and n (n
 
 ### Segments
 
-* Attributes: duration, start, end, mean, std, min, max, current
-* Instance Methods: to\_json( filename ), to\_dict(), to\_meta(), delete()
-* Class Methods: from\_json( filename )
+* **Attributes** : duration, start, end, mean, std, min, max, current
+* **Instance Methods** : to\_json( filename ), to\_dict(), to\_meta(), delete()
+* **Class Methods** : from\_json( filename )
 
 A segment stores the series of floats in a given range of ionic current. This abstract notion allows for both Event and File to inherit from it, as both a file and an event are a range of floats. The context in which you will most likely interact with a Segment is in representing a discrete step of the biopolymer through the pore, with points usually coming from the same distribution. 
 
