@@ -22,7 +22,7 @@ There are several core datatypes implemented in order to speed up analysis. Thes
 
 ### Files
 
-* **Attributes: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
+* **Attributes**: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
 * **Instance Methods**: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password )
 * **Class Methods**: from\_json( filename ), from\_database( ... )  
 
@@ -120,9 +120,9 @@ Event objects also have the properties start, end, duration, mean, std, and n (n
 
 ### Segments
 
-* **Attributes** : duration, start, end, mean, std, min, max, current
-* **Instance Methods** : to\_json( filename ), to\_dict(), to\_meta(), delete()
-* **Class Methods** : from\_json( filename )
+* **Attributes**: duration, start, end, mean, std, min, max, current
+* **Instance Methods**: to\_json( filename ), to\_dict(), to\_meta(), delete()
+* **Class Methods**: from\_json( filename )
 
 A segment stores the series of floats in a given range of ionic current. This abstract notion allows for both Event and File to inherit from it, as both a file and an event are a range of floats. The context in which you will most likely interact with a Segment is in representing a discrete step of the biopolymer through the pore, with points usually coming from the same distribution. 
 
