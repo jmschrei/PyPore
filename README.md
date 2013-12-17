@@ -18,7 +18,13 @@ Let's get started!
 
 # DataTypes
 
-## Files
+There are several core datatypes implemented in order to speed up analysis. These are currently File, Event, and Segment. Each of these is a way to store a full, or parts of, a .abf file and perform common tasks. 
+
+### Files
+
+* Attributes: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
+* Instance Methods: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password )
+* Class Methods: from\_json( filename ), from\_database( ... )  
 
 Nanopore data files consist primarily of current levels corresponding to ions passing freely through the nanopore ("open channel"), and a blockages as something passes through the pore, such as a DNA strand ("events"). Data from nanopore experiments are stored in Axon Binary Files (extension .abf), as a sequence 32 bit floats, and supporting information about the hardware. They can be opened and loaded with the following:
 
@@ -37,7 +43,11 @@ file.parse( parser=lambda_event_parser( threshold=110 ) )
 
 The events are now stored as Event objects in file.events. The only other important file methods involve loading and saving them to a cache, which we'll cover later. Files also have the properties mean, std, and n (number of events). 
 
-## Events
+### Events
+
+* Attributes: duration, start, end, mean, std, min, max, n, current, sample, segments, state\_parser, filtered, filter\_order, filter\_cutoff
+* Instance Methods: filter( order, cutoff ), parse( parser ), delete(), apply\_hmm( hmm ), plot( [hmm, kwargs), to\_meta(), to\_dict(), to\_json()
+* Class Methods: from\_json( filename ), from\_database( ... ), from\_segments( segments )  
 
 Events are segments of current which correspond to something passing through the nanopore. We hope that it is something which we are interested in, such as DNA or protein. An event is usually made up of a sequence of discrete segments of current, which should correspond to reading some region of whatever is passing through. In the best case, each discrete segment in an event corresponds to a single nucleotide of DNA, or a single amino acid of a protein passing through.
 
@@ -108,13 +118,19 @@ You'll see that I had to import Bifurcator from the hmm module. By just using th
 
 Event objects also have the properties start, end, duration, mean, std, and n (number of segments after segmentation has been performed). 
 
-## Segments
+### Segments
+
+* Attributes: duration, start, end, mean, std, min, max, current
+* Instance Methods: to\_json( filename ), to\_dict(), to\_meta(), delete()
+* Class Methods: from\_json( filename )
 
 A segment stores the series of floats in a given range of ionic current. This abstract notion allows for both Event and File to inherit from it, as both a file and an event are a range of floats. The context in which you will most likely interact with a Segment is in representing a discrete step of the biopolymer through the pore, with points usually coming from the same distribution. 
 
-Segments are short sequences of current samples, usually which appear to be from the same distribution. They are the core place where data are stored, as usually an event is analyzed by the metadata stored in each state. Segments have the attributes current, which stores the raw current samples, in addition to mean, std, duration, start, end, min, and max. They do not have any core methods.
+Segments are short sequences of current samples, usually which appear to be from the same distribution. They are the core place where data are stored, as usually an event is analyzed by the metadata stored in each state. Segments have the attributes current, which stores the raw current samples, in addition to mean, std, duration, start, end, min, and max.
 
-If storing the raw sequence of current samples is too memory intensive, there are two ways to get rid of the current attribute. 
+### Metadata
+
+If storing the raw sequence of current samples is too memory intensive, there are two ways to get rid of lists of floats representing the current, which take up the vast majority of the memory ( >~99% ).   
 
 1) Initialize a MetaSegment object, instead of a Segment one, and feed in whatever statistics you'd like to save. This will prevent the current from ever being saved to a second object. For this example, lets assume you have a list of starts and ends of segments in an event, such as loading them from a cache.
 
@@ -136,17 +152,19 @@ for segment in event.segments:
     segment.to_meta() 
 ```
 
+You may have noticed that every datatype implements a to\_meta() method, which removes simply retypes the object to "Meta...", and removes the current attribute, and all references to that list. Remember that in python, if any references exist to a list, the list still exists. This means that your file contains the list of ionic current, and all events or segments simply contain pointers to that list, so meta-izing a list or segment by itself probably won't help that much in terms of memory. However, you can meta-ize the File, which will meta-ize everything in the file tree. This means that calling to\_meta() on a file will cause to\_meta() to be called on each event, which will cause to\_meta() to be called on every segment, removing every reference to that list, and tagging that list for garbage collection.
+
 # Parsers
 
 Given that both Events and Files inherit from the Segment class, any parser can be used on both Events and Files. However, some were written for the express purpose of event detection or segmentation, and are better suited for that task.
 
-## Event Detector Intended Parsers
+### Event Detector Intended Parsers
 
 These parsers were intended to be use for event detection. They include:
 
 * *lambda_event_parser( threshold )* : This parser will define an event to be any consecutive points of ionic current between a drop below threshold to a jump above the threshold. This is a very simplistic parser, built on the idea that the difference between open channel current and the highest biopolymer related state in ~30-40% of open channel, meaning that setting this threshold anywhere in that range will quickly yield the events.
 
-## Segmenter Intended Parsers
+### Segmenter Intended Parsers
 
 * *SpeedyStatSplit( min_gain_per_sample, min_width, max_width, window_width, use_log )* : This parser uses maximum likelihood in order to split segments. This is the current best segmenter, as it can handle segments which have different variances but the same mean, and segments with very similar means. It is the cython implementation of StatSplit, speeding up the implementation ~40x. The min gain per sample attribute is the most important one, with ~0.5 being a good default, and higher numbers producing less segments, smaller numbers producing more segments. The min width and max width parameters are in points, and their default values are usually good. 
 
@@ -156,7 +174,7 @@ These parsers were intended to be use for event detection. They include:
 
 * *snakebase_parser( threshold )* : This parser takes the attitude that transitions between segments occurs when the peak-to-peak amplitude between two consecutive waves is higher than threshold. This method seems to work decently when segments have significantly different means, especially when over-segmenting is not a problem.
 
-## Misc.
+### Misc.
 
 * *MemoryParser( starts, ends )* : This parser is mostly used internally in order to load up saved analyses, however it is available for all to use. The starts of segments, and the ends, are provided in a list with the *i*-th element of starts and ends correspond to the *i*-th segment you wish to make. This can be used for event detection or segmentation.
 
@@ -164,7 +182,7 @@ These parsers were intended to be use for event detection. They include:
 
 If you perform an analysis and wish to save the results, there are multiple ways for you to do such. These operation seems common, for applications such as testing a HMM. If you write a HMM and want to make modifications to it, it would be useful to not have to redo the segmentation, but instead simply load up the same segmentation from the last time you did it. Alternatively, you may have a large batch of files you wish to analyze, and want to grab the metadata for each file to easily read after you go eat lunch, so you don't need to deal with the whole files.
 
-## MySQL Database:
+### MySQL Database:
 The first is to store it to a MySQL database. The tables must be properly made for this-- see database.py if you want to see how to set up your own database to store PyPore results. If you are connected to the UCSC SoE secure network, there is a MySQL database, named chenoo, which will allow you to store an analysis. This is done on the file level, in order to preserve RDBMS format. 
 
 ```
@@ -193,7 +211,7 @@ This will load the file back, with the previous segmentations. This will be anyw
 
 Now, it seems like there are a lot of parameters after user! You need to fill in as many of these as you can, to help identify which analysis you meant. AnalysisID is a primary key, but is also assigned by the database automatically when you stored it, so it is possible you do not know it. If you connect to MySQL independently and look up that ID, you can use it solely to identify which file you meant. If you do not provide enough information to uniquely identify a file, you may get an incorrect analysis.
 
-## JSON File
+### JSON File
 A more portable and simple way to store analyses is to save the file to a json. This can be done simply with the following code.
 
 ```
