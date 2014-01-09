@@ -1101,6 +1101,34 @@ class DiscreteDistribution(Distribution):
 # Register the DiscreteDistribution
 DiscreteDistribution.register()
 
+class LambdaDistribution(Distribution):
+    """
+    A distribution which takes in an arbitrary lambda function, and returns
+    that when asked.
+    """
+    name = "LambdaDistribution"
+    
+    def __init__(self, lambda_funct ):
+        """
+        Takes in a lambda function and stores it. This function should return
+        the log probability of seeing a certain input.
+        """
+        
+        # Store the parameters
+        self.parameters = [lambda_funct]
+        
+    def log_probability(self, symbol):
+        """
+        What's the probability of the given float under this distribution?
+        """
+        
+        return self.parameters[0](symbol)
+            
+
+# Register the UniformDistribution
+UniformDistribution.register()
+
+
 class State(object):
     """
     Represents a state in an HMM. Holds emission distribution, but not
