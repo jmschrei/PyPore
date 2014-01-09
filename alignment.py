@@ -8,11 +8,13 @@ This module focuses on sequence alignment methods, including both dicrete alignm
 continuous alignment inputs, for pairwise and multiple sequence alignment. 
 '''
 
+from yahmm import *
+from sklearn.neighbors import KernelDensity
+
 import numpy as np
 import math
 import itertools as it 
 
-from scipy.cluster.hierarchy import linkage
 from core import *
 from parsers import *
 from DataTypes import *
@@ -332,333 +334,326 @@ class RepeatFinder( object ):
     at least try to seperate out the tandem repeats beforehand. 
     '''
     def __init__( self, sequence ):
-        '''
-        Initiate by taking in a sequence containing tandem repeats due to enzyme activity, and
-        store them. 
-        '''
+    	pass
 
-        self.sequence = sequence
-        self.n = len(sequence)
-    
-    def _score( self, x, y ):
-        '''
-        This score function will take in two segments, and return a numerical representation of
-        the distance between the two segments. This is t-score difference between the two
-        segments, assuming both are samples drawn from normal distributions.
-        '''
-
-        return 1 if x == y else -1
-
-    def _splitter( self, penalty, plots, min_score ):
-        '''
-        The first step in finding repeats is to attempt to find split points, defined to be
-        between two randem repeats. For example:
-
-        sequence = ABCDEFGHDEFGHDEFGHIJKLMNOPQRS
-                   ABCDEFGH.DEFGH.DEFGHIJKLMNOPQRS ( Split points added in )
-
-        This identifies split points according to a self-self local alignment, repeatedly taking 
-        out alignments and realignments, taking out alignments until a minimum score is reached,
-        yielding them one at a time as a generator. The diagonal is masked from the beginning.
-        '''
-
-        n = self.n
-        seq = self.sequence
-
-        score = np.zeros( ( n+1, n+1 ) )
-        pointer = np.zeros( ( n+1, n+1 ) )
-        mask = np.identity( n+1 )
-        m = 0
-
-        while True:
-            for i in xrange( 1, n+1 ):
-                for j in xrange( i, n+1 ):
-
-                    # Score function for local alignment 
-                    scores = ( 0, 
-                                score[i-1, j-1] + self._score( seq[i-1], seq[j-1] ) if not mask[i-1, j-1] else -999,
-                                score[i, j-1] + penalty if not mask[i, j-1] else -999,
-                                score[i-1, j] + penalty if not mask[i-1, j] else -999
-                            )
-                    
-                    # Take the maximum score for each cell
-                    score[i, j] = max( scores )
-
-                    # Since this is a symmetric matrix, update the transpose cell as well
-                    score[j, i] = score[i, j]
-
-                    # Put in the correct pointer
-                    pointer[i, j] = scores.index( score[i, j] )
-                    pointer[j, i] = pointer[i, j]
-        
-            # Identify the highest scoring cell on the map
-            argmax = np.argmax( score )
-
-            i, j = argmax/(n+1), argmax%(n+1)
-            seq_score = score[i, j]
-            
-            # If the highest scoring cell is above a certain score, continue, else stop                
-            if seq_score <= min_score:
-                break
-                
-            # Follow the pointers back to a 0
-            length = 0
-            while pointer[i, j] != 0:
-                length += 1
-                mask[i, j] = mask[j, i] = 1
-                p = pointer[i, j] 
-                if p == 1:
-                    i -= 1
-                    j -= 1
-                elif p == 2:
-                    j -= 1
-                elif p == 3:
-                    i -= 1
-            mask[i,j] = 1
-
-            # Return a plot of the raw score, pointer matrix, and mask, for every iteration
-            if plots:
-                plt.figure( figsize=(20,10) )
-                plt.subplot(131)
-                plt.imshow( score, interpolation='nearest', cmap='Reds' )
-                plt.subplot(132)
-                plt.imshow( pointer, interpolation='nearest', cmap='Greens' )
-                plt.subplot(133)
-                plt.imshow( mask, interpolation='nearest', cmap='Purples' )        
-                plt.show()
-
-            # Yield the score, length of the repeat, and i, j index of the cell before reaching 0
-            yield seq_score, length, i, j
-
-    def _naive_msa( self, penalty, plots, min_score=4 ):
-        '''
-        Take in a sequence and return a naive MSA based on splitting the sequences, and sliding
-        them over in order to make a basic MSA to start an iterative alignment.
-        '''
-
-        splits = self._splitter( penalty, plots, min_score )
-
-        last_end, last_start, offset, sequences = 0, 0, 0, []
-        for score, length, start, end in sorted( splits, key=lambda x: x[3] ):
-            padded_sequence = ['-']* offset + self.sequence[ last_end:end ]
-            sequences.append( padded_sequence )
-
-            offset = ( len(sequences[-1]) - ( end-start ) if last_start != start else offset )
-            last_end, last_start = end, start
-
-        sequences.append( ['-']*offset + self.sequence[ last_end: ] )
-        n = max( map( len, sequences ) )
-
-        for i, seq in enumerate( sequences ):
-            sequences[i] = seq + ['-']*( n-len(seq) )
-
-        return sequences
-
-    def _msa_to_pssm( self, msa, pseudocount=1e-4 ):
-        '''
-        Take in a multiple sequence alignment as a list of lists, and returns a list of
-        dictionaries, where the dictionaries represent the discrete frequencies of
-        various characters. 
-        '''
-        alphabet = "QWERTYUIOPASDFGHJKLZXCVBNM"
-        pssm = []
-
-        for position in it.izip( *msa ):
-            fpos = filter( lambda x: x is not '-', position )
-            if len(fpos) == 0:
-                continue
-
-            pcounts = { char: fpos.count(char) for char in fpos }
-            apcounts = { key: pcounts[key]+1e-2 if key in pcounts else 1e-2 for key in alphabet }
-            n = sum( apcounts.values() )
-            pssm.append({ key: val / n for key, val in apcounts.items()}) 
-
-        return pssm
-
-    def _pssm_to_hmm( self, pssm, name="Underlying Profile" ):
-        '''
-        Take in a MSA, using it as a PSSM, and generate a HMM from it using frequencies in the
-        PSSM as the emission probabilities for the HMM. Since this is a profile HMM, it follows
-        the structure outlined in Durbin, Eddy, Krogh, and Mitchinson's "Biological Sequence
-        Analysis", pg. 106. 
-        '''
-
-        model = Model( name=name )
-        insert_dist = { char: 1. / 26 for char in string.ascii_uppercase }
-
-        last_match = model.start
-        last_insert = State( DiscreteDistribution( insert_dist ), name="I0" )
-        last_delete = None
-
-        model.add_transition( model.start, last_insert, 0.15 )
-        model.add_transition( last_insert, last_insert, 0.20 )
-
-        for i, position in enumerate( pssm ):
-            match = State( DiscreteDistribution( position ), name="M"+str(i+1) ) 
-            insert = State( DiscreteDistribution( insert_dist ), name="I"+str(i+1) )
-            delete = State( None, name="D"+str(i+1) )
-
-            model.add_transition( last_match, match, 0.60 )
-            model.add_transition( last_match, delete, 0.25 )
-            model.add_transition( last_insert, match, 0.60 )
-            model.add_transition( last_insert, delete, 0.20 )
-            model.add_transition( delete, insert, 0.15 )
-            model.add_transition( insert, insert, 0.20 )
-            model.add_transition( match, insert, 0.15 )
-
-            if last_delete:
-                model.add_transition( last_delete, match, 0.60 )
-                model.add_transition( last_delete, delete, 0.25 )
-
-            last_match, last_insert, last_delete = match, insert, delete
-
-        model.add_transition( last_delete, model.end, 0.80 )
-        model.add_transition( last_insert, model.end, 0.80 )
-        model.add_transition( last_match, model.end, 0.85 )
-
-        model.bake()
-        return model           
-    
-    def _iterate( self, msa, epsilon ):
-        '''
-        Perform iterative multiple sequence alignment, by removing a single sequence and realigning
-        it to the profile. It will do this by removing a single sequence, building a profile HMM
-        using the remaining sequenes, and then using the HMM to align the removed sequence back
-        into the MSA.
-        '''
-
-        msa = [ [ 'A', 'B', 'C', 'D', 'E', 'F', '-', '-', '-', '-', '-' ],
-                [ '-', '-', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L' ],
-                [ '-', '-', 'C', 'D', 'F', 'H', '-', '-', '-', '-', '-' ],
-                [ '-', '-', 'C', 'D', 'E', 'F', 'H', 'I', 'J', 'K', '-' ],
-                [ 'K', 'L', 'M', 'N', 'O', '-', '-', '-', 'P', 'Q', 'R' ] ]
-
-        difference, last_difference = 0, 10
-        while abs( difference - last_difference ) >= epsilon:
-            print
-            for seq in msa:
-                print ''.join( seq )
-
-            seq = [ char for char in msa[ 0 ] if char != '-' ]
-            msa = msa[ 1: ] 
-
-            pssm = self._msa_to_pssm( msa )
-            profile = self._pssm_to_hmm( pssm )
-            prob, states = profile.viterbi( seq )
-
-            aligned_seq = []
-            inserts = []
-            i, j = 0, 0
-            for state in states[1:-1]:
-                state = state[1].name # Unpack the name of the node
-                #cons = sorted( pssm[j].items(), key=lambda x: x[1], reverse=True )[0][0]
-
-                if state[0] == 'M':
-                    #print "{0:4}{1:4}{2:4}".format( seq[i], cons, state )
-                    aligned_seq.append( seq[i] )
-                    i += 1
-                    j += 1
-                elif state[0] == 'D':
-                    #print "{0:4}{1:4}{2:4}".format( '-', cons, state )
-                    aligned_seq.append( '-' )
-                    j += 1
-                elif state[0] == 'I':
-                    #print "{0:4}{1:4}{2:4}".format( seq[i], '-', state )
-                    aligned_seq.append( seq[i] )    
-                    i += 1
-
-            last_difference -= 1
-            msa.append( aligned_seq )
-
-            n = max( map( len, msa ) )
-            for seq in msa:
-                seq.extend( ['-']*(n-len(seq)) )
-
-        '''
-        pssm = self._msa_to_pssm( msa )
-        i, j = 0, 0
-        for state in states[1:-1]:
-            state = state[1].name
-            if state[0] == 'M':
-                print "{0:4}{1:4}{2:4}".format( seq[i], profile, state )
-                i += 1
-                j += 1
-            elif state[0] == 'D':
-                print "{0:4}{1:4}{2:4}".format( '-', profile, state )
-                j += 1
-            elif state[0] == 'I':
-                print "{0:4}{1:4}{2:4}".format( seq[i], '-', state )
-                i += 1
-        '''
-        return msa
-
-    def compute( self, penalty=-1, plots=False, min_score=4, epsilon=1e-8 ):
-        '''
-        Client function that will allow you to do stuff.
-        '''
-
-        initial_MSA = self._naive_msa( penalty=penalty, plots=plots, min_score=min_score )
-        consensus = self._iterate( msa=initial_MSA, epsilon=epsilon )
-
-
-class MultipleSequenceAlignment( object ):
+class PSSM( object ):
 	'''
-	This object will take in a series of sequences and attempt to align them all as a multiple
-	sequence alignment. It uses iterative alignment, taking in an initial MSA and peeling off
-	one sequence at a time and realigning them. 
+	A position specific scoring matrix. For every position in a multiple sequence alignment,
+	characterize the kernel density of the distribution of means. This is done by taking in
+	the means for every segment in a column, characterizing the kernel density using a 
+	ball-tree method and Gaussian kernel, and then allowing for pseudocounts. Much as a
+	discrete PSSM would have a lookup table for each character in each specific position,
+	a continuous PSSM will return the log probability according to the kernel density,
+	adjusted by a small pseudocount. 
 	'''
 
+	def __init__( self, msa ):
+		'''
+		Upon receiving the MSA, transform it into the PSSM by taking the kernel density of every
+		column. Pseudocounts should be given in linear space, not log space, and converted into
+		log space upon initialization. 
+		'''
+
+		if type(msa) is list and type(msa[0]) is not list:
+			msa = [ msa ]
+
+		self.consensus = []
+		self.pssm = []
+		for column in it.izip( *msa ):
+			column = filter( lambda x: x is not '-', column )
+			if len( column ) == 0:
+				continue
+
+			kd = KernelDensity( bandwidth=0.5 )
+			kd.fit( [ [ mean ] for mean in column ] )
+
+			self.pssm.append( kd.score )
+			self.consensus.append( np.mean( [mean for mean in column] ) )
+
+	def __getitem__( self, slice ):
+		'''
+		When one is slicing the PSSM, they really want the underlying data in the PSSM. 
+		'''
+
+		return self.pssm[ slice ]
+
+	def __repr__( self ):
+		'''
+		A string representation of the PSSM
+		'''
+
+		return '\n'.join( "{}".format( mean ) for mean in self.consensus )
+
+	def __len__( self ):
+		'''
+		The number of positions in the PSSM.
+		'''
+
+		return len( self.pssm )
+
+
+class ProfileAligner( object ):
+	def __init__( self, master, slave ):
+		'''
+		Must take in a PSSM object or a list of whatever is being aligned. Both x and y must be a
+		list of at least one list, where each inner list represents a sequence. For example:
+
+		x = [ [ 'A', 'B', 'C', 'D', 'E' ],
+              [ '-', '-', 'C', 'D', 'E' ],
+              [ 'A', 'B', 'D', '-', '-' ] ]
+        y = [ [ 'A', 'B', 'E', 'F', 'G' ] ]
+
+        This means that simple pairwise comparison can be done by generating PSSMs where each
+        character has a ~100% probability in its respective position. All alignments are
+        generalized as profile alignments in this manner.
+		'''
+
+		self.master = PSSM( master )
+		self.slave = PSSM( slave )
+
+	def _build( self, pssm, low, high ):
+		model = Model( name="Global Profile Aligner" )
+		insert_dist = UniformDistribution( low, high )
+		last_match = model.start
+		last_insert = State( insert_dist, name="I0" )
+		last_delete = None
+
+		model.add_transition( model.start, last_insert, 0.15 )
+		model.add_transition( last_insert, last_insert, 0.20 )
+
+		for i, column in enumerate( pssm ):
+			match = State( LambdaDistribution( column ), name="M"+str(i+1) ) 
+			insert = State( insert_dist, name="I"+str(i+1) )
+			delete = State( None, name="D"+str(i+1) )
+
+			model.add_transition( last_match, match, 0.50 )
+			model.add_transition( last_match, delete, 0.35 )
+			model.add_transition( last_insert, match, 0.65 )
+			model.add_transition( last_insert, delete, 0.20 )
+			model.add_transition( delete, insert, 0.15 )
+			model.add_transition( insert, insert, 0.15 )
+			model.add_transition( match, insert, 0.15 )
+
+			if last_delete:
+				model.add_transition( last_delete, match, 0.65 )
+				model.add_transition( last_delete, delete, 0.20 )
+
+			last_match, last_insert, last_delete = match, insert, delete
+
+		model.add_transition( last_delete, model.end, 0.80 )
+		model.add_transition( last_insert, model.end, 0.80 )
+		model.add_transition( last_match, model.end, 0.85 )
+
+		model.bake()
+		return model
+
+	def global_alignment( self, low=0, high=60  ):
+		'''
+		Perform a global alignment using a HMM. This aligns two profiles two each other,
+		returning the probability of the alignment, and the two consensus alignments. 
+		'''
+
+		profile = self._build( self.master, low, high )
+		prob, states = profile.viterbi( self.slave.consensus )
+		
+		master = self.master.consensus
+		slave = self.slave.consensus
+
+		slave_aligned = []
+		master_aligned = []
+		i, j = 0, 0 
+		# Follow y's path through x, ignoring start and end state
+		for state in states[1:-1]:
+			sname = state[1].name
+
+			if sname.startswith( 'M' ):
+				slave_aligned.append( slave[i] )
+				master_aligned.append( master[j] )
+				i += 1
+				j += 1
+			elif sname.startswith( 'D' ):
+				slave_aligned.append( '-' )
+				master_aligned.append( master[j] )
+				j += 1
+			elif sname.startswith( 'I' ):
+				slave_aligned.append( slave[i] )
+				master_aligned.append( '-' )  
+				i += 1
+
+		return prob, master_aligned, slave_aligned
+
+class MultipleSequenceAligner( object ):
 	def __init__( self, sequences ):
-		self.sequences
+		self.sequences = sequences
 
-	def _msa_to_pssm( self, sequences, pseudocounts=1e-4 ):
+	def _score( self, msa ):
 		'''
-		This takes in a given msa and generates a PSSM for it. For testing purposes, the prior
-		will be a uniform distribution across the alphabet. The prior distribution will otherwise
-		be the kernel density of points, using a gaussian kernel. 
+		The score for a discrete MSA would be done by trying to minimize entropy. For a continuous
+		variable, this is the differential entropy. This assumes that the underlying distribution
+		comes from a normal distribution.
 		'''
-		pass
 
-    def _pssm_to_hmm( self, pssm, name="Underlying Profile" ):
-        '''
-        Take in a MSA, using it as a PSSM, and generate a HMM from it using frequencies in the
-        PSSM as the emission probabilities for the HMM. Since this is a profile HMM, it follows
-        the structure outlined in Durbin, Eddy, Krogh, and Mitchinson's "Biological Sequence
-        Analysis", pg. 106. 
-        '''
+		entropy = lambda col: 0.5*math.log( 2*np.pi*np.e*np.std( col )**2 ) if len(col) > 1 and np.std(col) > 0 else 0
+		score = sum( entropy( filter( lambda x: x is not '-', col ) ) for col in it.izip( *msa ) )
+		return score
 
-        model = Model( name=name )
-        insert_dist = { char: 1. / 26 for char in string.ascii_uppercase }
+	def iterative_alignment( self, epsilon=1e-4, max_iterations=10 ):
+		'''
+		Perform a HMM-based iterative alignment. If an initial alignment is provided, will use that
+		to begin with, otherwise will simply use the sequences provided raw. This method will peel
+		the top sequence off and align it to a profile of the other sequences, continuing this 
+		method until there is little change in the score for a full round of iteration. The scoring 
+		mechanism is done by minimum entropy.
+		'''
 
-        last_match = model.start
-        last_insert = State( DiscreteDistribution( insert_dist ), name="I0" )
-        last_delete = None
+		# Unpack the initial sequences
+		best_msa = msa = self.sequences
 
-        model.add_transition( model.start, last_insert, 0.15 )
-        model.add_transition( last_insert, last_insert, 0.20 )
+		n = len( msa )
+		# Give initial scores
+		score, last_score = float("-inf"), float("inf")
 
-        for i, position in enumerate( pssm ):
-            match = State( DiscreteDistribution( position ), name="M"+str(i+1) ) 
-            insert = State( DiscreteDistribution( insert_dist ), name="I"+str(i+1) )
-            delete = State( None, name="D"+str(i+1) )
+		# Until the scores converge...
+		iteration = 0
+		while abs( score-last_score ) >= epsilon and iteration < max_iterations:
+			iteration += 1
+			last_score = score
+			score = 0
+			# Run a full round of popping from the msa queue and enqueueing at the end
+			for i in xrange( n ):
+				# Pull a single 'master' sequence off the top of the msa queue
+				slave = filter( lambda x: x is not '-', msa[0] )
 
-            model.add_transition( last_match, match, 0.60 )
-            model.add_transition( last_match, delete, 0.25 )
-            model.add_transition( last_insert, match, 0.60 )
-            model.add_transition( last_insert, delete, 0.20 )
-            model.add_transition( delete, insert, 0.15 )
-            model.add_transition( insert, insert, 0.20 )
-            model.add_transition( match, insert, 0.15 )
+				# Make the rest of them slaves
+				master = msa[1:]
 
-            if last_delete:
-                model.add_transition( last_delete, match, 0.60 )
-                model.add_transition( last_delete, delete, 0.25 )
+				# Perform the alignment using the HMM-based profile aligner
+				p, x, y = ProfileAligner( master, slave ).global_alignment()
 
-            last_match, last_insert, last_delete = match, insert, delete
+				# Add gaps to all sequences in the slave profile
+				master.append( y )
+				msa = master
 
-        model.add_transition( last_delete, model.end, 0.80 )
-        model.add_transition( last_insert, model.end, 0.80 )
-        model.add_transition( last_match, model.end, 0.85 )
+				m = max( map( len, msa ) )
+				for seq in msa:
+					seq.extend( ['-']*(m-len(seq) ) )
 
-        model.bake()
-        return model 
+				# Calculate the score for this run
+				score += self._score( msa ) / float(n)
+
+			if score < last_score:
+				best_msa = msa
+
+			print score
+
+		return score, best_msa
+
+	def progressive_initialization( self ):
+		offset, msa = 0, []
+		
+		for seq in self.sequences:
+			msa.append( ['-']*offset + seq )
+			offset += len(seq)
+
+		n = max( map( len, msa ) )
+		for seq in msa:
+			seq += ['-']*(n-len(seq))
+
+		return msa
+
+
+def NaiveTRF( seq, penalty=-1, min_score=2 ):
+	'''
+	Takes in a sequence with repeats that are based on rereading certain parts of an underlying segment.
+	This is made up of two steps: (1) Running local alignment repeatedly, pulling out the highest ranking
+	off-diagonal alignments. (2) Stitching these back together by generating a naive MSA.
+	'''  
+
+	def NaiveSplitter( seq, penalty, min_score ):
+		'''
+		This naive splitter will simply look for off-diagonal alignments which correspond to finding a
+		local repeat.
+		'''
+
+		_score = lambda x, y: 2 - abs( x.mean - y.mean ) ** 2 / ( x.std * y.std ) 
+		n = len(seq)
+
+		score = np.zeros( ( n+1, n+1) )
+		pointer = np.zeros( ( n+1, n+1 ) )
+		mask = np.identity( n+1 )
+
+		while True:
+			for i in xrange( 1, n+1 ):
+				for j in xrange( i, n+1 ):
+
+					# Score function for local alignment, allowing for a mask to prevent certain alignments
+					scores = ( 0, 
+							   score[i-1, j-1] + _score( seq[i-1], seq[j-1] ) if not mask[i-1, j-1] else -999,
+							   score[i, j-1] + penalty if not mask[i, j-1] else -999,
+							   score[i-1, j] + penalty if not mask[i-1, j] else -999
+	                         )
+
+					# Fill in both triangles of the symmetric matrix with the best score
+					score[i, j] = max( scores )
+					score[j, i] = score[i, j]
+
+					# Fill in the pointer matrix appropriately
+					pointer[i, j] = scores.index( score[i, j] )
+					pointer[j, i] = pointer[i, j]
+
+			# Find the maximum scoring element of the matrix
+			argmax = np.argmax( score )
+			i, j = argmax/(n+1), argmax%(n+1)
+			alignment_score = score[i, j]
+
+			# If the score is not above the minimum threshold, exit
+			if alignment_score <= min_score:
+				break
+
+			# Begin traceback to find the length
+			length = 0
+			while pointer[i, j] != 0:
+				length += 1
+
+				# Mask this cell so it won't be pulled in the next iteration
+				mask[i, j] = mask[j, i] = 1
+
+				# Unpack the pointer
+				p = pointer[i, j]
+
+				if p == 1:
+					i -= 1
+					j -= 1
+				elif p == 2:
+					j -= 1
+				elif p == 3:
+					i -= 1
+
+			# End on the beginning, ensure it is masked for the next iteration
+			mask[i, j] = 1
+
+			# Yield the score, the length, and the x-y coordinates of the start of the alignment
+			yield alignment_score, length, i, j
+
+	splits = NaiveSplitter( seq=seq, penalty=penalty, min_score=min_score )
+	last_end, last_start, offset, sequences = 0, 0, 0, []
+
+	for score, length, start, end in sorted( splits, key=lambda x: x[3] ):
+		# Pull each off-diagonal alignment, pad the start of each segment appropriately and save them
+		sequences.append( ['-']*offset + seq[ last_end:end ] )
+
+		# Update all parameters
+		offset = ( len(sequences[-1]) - ( end-start ) if last_start != start else offset )
+		last_end, last_start = end, start
+
+	# Add in the remainder of the sequence
+	sequences.append( ['-']*offset + seq[ last_end: ] )
+	
+	# Find the longest sequence which has been appended
+	n = max( map( len, sequences ) )
+
+	# Pad the ends of the sequences
+	for i, seq in enumerate( sequences ):
+		sequences[i] = seq + ['-']*( n-len(seq) )
+
+	return sequences
