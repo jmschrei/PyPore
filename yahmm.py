@@ -1128,7 +1128,6 @@ class LambdaDistribution(Distribution):
 # Register the UniformDistribution
 UniformDistribution.register()
 
-
 class State(object):
     """
     Represents a state in an HMM. Holds emission distribution, but not
@@ -2156,6 +2155,60 @@ class Model(object):
         hmm.bake()
         return hmm
     
+    @classmethod
+    def from_matrix( cls, matrix, distributions, starts, ends,
+        names=None, model_name=None ):
+        """
+        Take in a 2D matrix of floats of size n by n, which are the transition
+        probabilities to go from any state to any other state. May also take in
+        a list of length n representing the names of these nodes, and a model
+        name. Must provide the matrix, and a list of size n representing the
+        distribution you wish to use for that state, a list of size n indicating
+        the probability of starting in a state, and a list of size n indicating
+        the probability of ending in a state.
+
+        For example, if you wanted a model with two states, A and B, and an
+        equal chance of switching between the two and two different gaussian
+        emissions, you would do the following:
+
+        matrix = [ [ 0.5, 0.5 ], [ 0.5, 0.5 ] ]
+        distributions = [ NormalDistribution( 1, .5 ), NormalDistribution( 5, 2 ) ]
+        starts = [ 1., 0. ]
+        ends = [ 0., 1. ]
+        names= [ "A", "B" ]
+
+
+        model = Model.from_matrix( matrix, distributions, starts, ends, names )
+
+        """
+
+        # Build the initial model
+        model = Model( name=model_name )
+
+        # Build state objects for every state with the appropriate distribution
+        states = [ State( distribution, name=name ) for name, distribution in
+            itertools.izip( names, distributions) ]
+        n = len( states )
+
+        # Connect the start of the model to the appropriate state
+        for i, prob in enumerate( starts ):
+            if prob != 0:
+                model.add_transition( model.start, states[i], prob )
+
+        # Connect all states to each other if they have a non-zero probability
+        for i in xrange( n ):
+            for j, prob in enumerate( matrix[i] ):
+                if prob != 0.:
+                    model.add_transition( states[i], states[j], prob )
+
+        # Connect states to the end of the model if a non-zero probability 
+        for i, prob in enumerate( ends ):
+            if prob != 0:
+                model.add_transition( states[j], model.end, prob )
+
+        model.bake()
+        return model
+
     def train(self, sequences, stop_threshold=1E-9, min_iterations=0,
          transition_pseudocount=0):
         """
@@ -2199,8 +2252,6 @@ class Model(object):
             print "Training improvement: {}".format(improvement)
             
         return log_score
-        
-        
         
     def train_once(self, sequences, transition_pseudocount=0):
         """
