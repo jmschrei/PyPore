@@ -43,21 +43,24 @@ from alignment import *
 import json
 import time
 from itertools import chain, izip, tee, combinations
+import itertools as it
 
 class Event( Segment ):
     '''
     A container for the ionic current corresponding to an 'event', which means a portion of the 
     file containing useful data. 
     '''
+
     def __init__( self, current, start, file ):
         Segment.__init__( self, current, file=file, duration=current.shape[0]/file.second, 
                           filtered=False, start =start/file.second, segments=[], sample=None, n=0 )
          
-    def filter( self, order = 1, cutoff = 2000. ):
+    def filter( self, order=1, cutoff=2000. ):
         '''
         Performs a bessel filter on the selected data, normalizing the cutoff frequency by the 
         nyquist limit based on the sampling rate. 
         '''
+
         if type(self) != Event:
             raise TypeError( "Cannot filter a metaevent. Must have the current." )
         from scipy import signal
@@ -68,18 +71,71 @@ class Event( Segment ):
         self.filter_order = order
         self.filter_cutoff = cutoff
 
-    def parse( self, parser=SpeedyStatSplit( min_gain_per_sample=0.3 ), filter = False ):
+    def parse( self, parser=SpeedyStatSplit( min_gain_per_sample=0.3 ), hmm=None ):
         '''
         Ensure that the data is filtered according to a bessel filter, and then applies a 
-        plug-n-play state parser which must contain a .parse method. 
+        plug-n-play state parser which must contain a .parse method. If a hmm is given, it will
+        use a hmm to assist in the parsing. This occurs by segmenting the event using the parser,
+        and then running the segments through the hmm, stringing together consecutive segments
+        which yield the same state in the hmm. If no hmm is given, returns the raw parser
+        segmentation.
         '''
-        if type(self) != Event:
+
+        # Ensure that a MetaEvent has not been falsely assigned the tag Event
+        if type(self) is not Event:
             raise TypeError( "Cannot parse a metaevent. Must have the current." )
-        if self.filtered == False and filter:
-            self.filter()
+
         self.segments = np.array( [ Segment( current=segment.current, start=segment.start, 
-                                           second=self.file.second, event=self ) for segment in parser.parse( self.current ) ] ) 
-        self.n = self.segments.shape[0]
+            second=self.file.second, event=self ) for segment in parser.parse( self.current ) ] ) 
+
+        # If using HMM-Guided Segmentation, run the segments through the HMM
+        if hmm:
+
+            # Currently only supports HMMs generated from yahmm
+            assert type( hmm ) is Model, "TypeError: hmm must be generated from yahmm package."
+
+            # Find the viterbi path through the events
+            logp, states = self.apply_hmm( hmm )
+            states = states[1:-1]
+            
+            second = self.file.second
+            i, j, segments = 0, 0, []
+            n = len(states)
+            while i < n-1:
+                if states[i] != states[i+1] or i == n-2:
+                    ledge = self.segments[j]
+                    redge = ( self.segments[i] if i < n-2 else self.segments[i+1] )
+                    segs = self.segments[j:i+1]
+
+                    if self.__class__.__name__ == "MetaEvent":
+                        duration = sum( seg.duration for seg in segs )
+                        mean = sum( seg.mean*seg.duration for seg in segs )/duration
+                        std = math.sqrt( sum( seg.std**2*seg.duration for seg in segs )/duration )
+
+                        segments.append( MetaSegment( start=ledge.start*second,
+                                                      duration=duration,
+                                                      mean=mean,
+                                                      std=std,
+                                                      event=self,
+                                                      second=self.file.second,
+                                                      hidden_state=states[j].name ) )
+
+                    else:
+                        current = self.current[ ledge.start*second : redge.start*second+redge.n ]
+                        segments.append( Segment( start=ledge.start*second,
+                                                  current=current,
+                                                  event=self,
+                                                  second=self.file.second,
+                                                  hidden_state=states[j][1].name ) )
+                    j = i
+
+                i += 1
+
+            self.segments = segments
+
+
+        print len( self.segments)
+        self.n = len( self.segments )
         self.state_parser = parser
 
     def delete( self ):
@@ -87,6 +143,7 @@ class Event( Segment ):
         Delete all data associated with itself, including making the call on all segments if they
         exist, ensuring that all references get removed immediately.
         '''
+
         with ignored( AttributeError ):
             del self.current
         with ignored( AttributeError ):
@@ -97,13 +154,11 @@ class Event( Segment ):
 
     def apply_hmm( self, hmm ):
         '''
-        Apply a hmm instance to the segments, and reduce the predict method of the hmm, which
-        for hmms defined in PyPore.hmm will be the hidden state identity for each segment.
+        Apply a hmm to the segments, returning the log probability and the state
+        sequence. Only uses the means of the segments currently. 
         '''
-        with ignored( AttributeError ):
-            segments = np.array([ seg.mean for seg in self.segments ])
-            segments.shape = (segments.shape[0], 1)
-        return hmm.predict( segments )
+
+        return hmm.viterbi( np.array([ seg.mean for seg in self.segments ]) )
 
     def plot( self, hmm=None, **kwargs ):
         '''
@@ -113,7 +168,7 @@ class Event( Segment ):
         '''
 
         if hmm:
-            hmm_seq = self.apply_hmm( hmm )
+            _, hmm_seq = self.apply_hmm( hmm )
             if hasattr( hmm, 'colors' ):
                 color_cycle = [ hmm.colors[i] for i in hmm_seq ]
             else:
@@ -124,7 +179,7 @@ class Event( Segment ):
                 color = [ 'brgc'[i%4] for i in xrange(self.n) ]
             elif kwargs['color'] == 'hmm':
                 if hmm:
-                    hmm_seq = self.apply_hmm( hmm )
+                    _, hmm_seq = self.apply_hmm( hmm )
                     if hasattr( hmm, 'colors' ):
                         color = [ hmm.colors[i] for i in hmm_seq ]
                     else:
@@ -147,7 +202,7 @@ class Event( Segment ):
             else:
                 plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
         else:
-            for c, segment in zip( color, self.segments ):
+            for c, segment in it.izip( color, self.segments ):
                 if isinstance( segment, MetaSegment ):
                     x = ( segment.start, segment.duration+segment.start )
                     y_high = lambda z: segment.mean + z * segment.std
@@ -157,7 +212,7 @@ class Event( Segment ):
                     plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.4 )
                     plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.2 )
                 else:
-                    plt.plot( np.arange(0, segment.duration, 1./self.file.second) + segment.start, segment.current, color=c, **kwargs )
+                    plt.plot( np.arange(0, segment.duration, 1./self.file.second)+segment.start, segment.current, color=c, **kwargs )
 
         plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
         plt.xlabel( "Time (s)" )
@@ -252,7 +307,8 @@ class File( Segment ):
     def __init__( self, filename, **kwargs ):
         timestep, current = read_abf( filename )
         filename = filename.split("\\")[-1].split(".abf")[0]
-        Segment.__init__( self, current=current, filename=filename, second=1000./timestep, events=[], sample=None, n=0 )
+        Segment.__init__( self, current=current, filename=filename, second=1000./timestep, 
+                                events=[], sample=None, n=0 )
 
     def __getitem__( self, index ):
         return self.events[ index ]
@@ -263,7 +319,7 @@ class File( Segment ):
         which returns a tuple corresponding to the 
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
-        self.events = [ Event( current=segment.current, start=segment.start, file=self ) for segment in parser.parse( self.current ) ]
+        self.events = [ Event( current=seg.current, start=seg.start, file=self ) for seg in parser.parse( self.current ) ]
         self.n = len( self.events )
         self.event_parser = parser
         del self.current
@@ -510,10 +566,24 @@ class File( Segment ):
 
 
 class Experiment( Container ):
+    '''
+    An experiment represents a series of files which all are to be analyzed together, and have
+    their results bundled. This may be many files run on the same nanopore experiment, or the
+    same conditions being tested over multiple days. It attempts to construct a fast and efficient
+    way to store the data. Functions are as close to the file functions as possible, as you are
+    simply applying these functions over multiple files.
+    '''
+
     def __init__( self, samples=[], files=[], events=[], segments=[] ):
-        Container.__init__( self, samples=samples, files=files, events=events, segments=segments, event_count=len(events) )
+        Container.__init__( self, samples=samples, files=files, events=events, 
+                            segments=segments, event_count=len(events) )
 
     def parse( self, parser=lambda_event_parser( threshold=90 ) ):
+        '''
+        The same interface as the file parsing method. Does not parse events; returns parsed
+        file objects, the same way that file.parse returns events.  
+        '''
+
         for file in self.files:
             file.parse( parser=parser )
             self.event_count += file.n
@@ -522,9 +592,8 @@ class Experiment( Container ):
 
     def apply_hmm( self, hmm, filter=None, indices=None ):
         segments = []
-        hmm = hmm_factory[ hmm ]
         for event in self.get( "events", filter=filter, indices=indices ):
-            _, segs = hmm.classify( event )
+            _, segs = hmm.viterbi( np.array( seg.mean for seg in event.segments ) )
             segments = np.concatenate( ( segments, segs ) )
         return segments
 
