@@ -4,191 +4,127 @@
 # hmm.py
 
 '''
-This module allows for the extension of sklearn.hmm to be more applicable to reading nanopore
-traces. This means creating a wrapper for the GaussianHMM class which handles event objects,
-and allowing for scaling and clustering of ionic current levels in a specific way. This also
-defines several specific HMMs in a function which returns the built NanoporeHMM. 
+This module serves as a collection for the various HMMs which are written for the nanopore lab.
+HMMs must be written using Yet Another Hidden Markov Model (yahmm) package. When adding a new
+HMM to the list, please follow the pattern set up, and also remember to update the factory at
+the bottom. Use the format that the string is the same as the name of the function which returns
+that HMM. 
 '''
 
-from sklearn.hmm import GaussianHMM, _BaseHMM
-from core import *
-import string
-import numpy as np
-
-class NanoporeHMM( GaussianHMM ):
-	'''
-	A wrapper for GaussianHMM, which makes it more specific for nanopore experiments. This involves
-	allowing for scaling (based on drift due to evaporation, or change in salt concentration), and
-	for clustering an event in a series of states defined by consecutive labels of the hidden
-	state, rather than a partitioner. 
-	'''
-
-	def scale( self, mult=None, add=None ):
-		'''
-		Scale the distribution of the Gaussian either multiplicatively or additively. 
-		'''
-		if mult:
-			self._means_ *= mult
-		if add:
-			self._means_ += add
-
-	def classify( self, event, algorithm = 'viterbi' ):
-		'''
-		Take an event which has been partitioned by a partitioner, and return a list of states
-		which have been reduced to the span of hidden states. For example, if you have the following:
-
-		A B C D E F G
-		X X X Y Y Z X
-
-		where A:G are observed segments in the event, and X:Z are hidden states defined in the HMM.
-		Running this method would return:
-
-		H I J K
-		X Y Z X
-
-		where H is a distribution that is the pdf addition of A B C, and I is the pdf addition of
-		D and E. 
-		'''
-
-		means = np.array([ seg.mean for seg in event.segments ])
-		means.shape = ( state_means.shape[0], 1 )
-
-		_, states = self.decode( means, algorithm )
-
-		reduced_segments, reduced_states = [], []
-
-		i, j = 0, 0
-		while i < len( states ) - 1:
-			if states[i] != states[i+1]:
-				duration = np.sum([ seg.duration for seg in event.segments[j:i+1] ] )
-				mean = np.sum([  ])
-
-			if state_sequence[i] != state_sequence[i+1]:
-				duration = np.sum( [ seg.duration for seg in event.segments[j:i] ] )
-				mean = np.sum( [seg.mean*seg.duration for seg in event.segments[j:i]] ) / duration
-				std = np.sum([seg.std*seg.duration for seg in event.segments[j:i]]) / duration
-
-				if event.__class__.__name__ == "MetaEvent":
-					segments.append( MetaSegment( start=event.segments[j].start,
-												  duration=duration,
-												  mean=mean,
-												  std=std,
-												  event=event,
-												  second=event.file.second,
-												  hidden_state=state_sequence[j] ) )
-				else:
-					current = event.current[ event.segments[j].start: event.segments[i].start + event.segments[i].n ]
-					segments.append( Segment( start=event.segments[j].start, 
-											  current = current, 
-						                      event = event, second = event.file.second,
-						                      hidden_state = state_sequence[j]
-						                     ) )
-					new_state_sequence.append( state_sequence[j] )
-				j = i + 1
-			i += 1
-		return new_state_sequence, segments 
+from yahmm import *
 
 def AbasicFinder():
 	'''
-	Attempts to decode an ionic current sequence to tell the number
-	of abasic residues which have passed through the pore. This assumes
-	being fed superpoints representing states, and probabilities are
-	scaled as such. 
+	This HMM will attempt to find abasics, when abasics are seen as
+	spikes of current up to approximately ~30 pA. Usual conditions
+	this works for are 180 mV in a-haemolysin porin.
 	'''
-	# Index 0: Random Current
-	# Index 1: Abasic Residue
-	n_components = 3
-	startprob = np.array( [ 1, 0, 0 ] )
-	transmat = np.array( [ [ 0.00, 1.00, 0.00 ],
-				           [ 0.05, 0.80, 0.15 ],
-				           [ 0.00, 0.90, 0.10 ] ] )
-	covars = np.array( [ [ 7 ],
-			             [ 5 ],
-			             [ 2 ] ] )
-	means = np.array( [ [ 40 ],
-			            [ 20 ],
-			            [ 30.75 ] ] )
 
-	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
-	hmm._means_ = means
-	hmm._covars_ = covars 
-	return hmm
+	model = Model( name="Abasic Finder" )
+
+	s1 = State( NormalDistribution( 40.00, 7 ), name="1" )
+	s2 = State( NormalDistribution( 20.00, 5 ), name="2" )
+	s3 = State( NormalDistribution( 30.75, 2 ), name="3" )
+
+	model.add_state( s1 )
+	model.add_state( s2 )
+	model.add_state( s3 )
+
+	model.add_transition( model.start, s1, 1.00 )
+	model.add_transition( s1, s2, 1.00 )
+	model.add_transition( s2, s2, 0.80 )
+	model.add_transition( s2, s3, 0.10 )
+	model.add_transition( s3, s2, 0.80 )
+	model.add_transition( s3, s3, 0.10 )
+	model.add_transition( s2, model.end, 0.10 )
+	model.add_transition( s3, model.end, 0.10 )
+	
+	model.bake()
+	return model
 
 def tRNAbasic_A8T0H11():
-	n_components=11
+	model = Model( name="A8T0H115_Model")
+	model.colors = [ 'r', 'y', 'b', 'b', 'b', 'g', 'b', 'b', 'b', 'm', 'b' ]
 
-	startprob = np.array([ 0.20, 0.15, 0.55, 0.10, 0, 0, 0, 0, 0, 0, 0 ])
+	s1 = State( NormalDistribution( 40, 7.75 ), name="1" )
+	s2 = State( NormalDistribution( 29.1, 1.15 ), name="2" )
+	s3 = State( NormalDistribution( 24.29, 0.155), name="3" )
+	s4 = State( NormalDistribution( 26.04, 0.352 ), name="4" )
+	s5 = State( NormalDistribution( 23.8, 0.427 ), name="5" )
+	s6 = State( NormalDistribution( 28.37, 0.464 ), name="6" )
+	s7 = State( NormalDistribution( 26.8, 0.8678 ), name="7" )
+	s8 = State( NormalDistribution( 25.4, 0.533 ), name="8" )
+	s9 = State( NormalDistribution( 22.77, 0.481 ), name="9" )
+	s10 = State( NormalDistribution( 30.06, 1.46 ), name="10" )
+	s11 = State( NormalDistribution( 24.9, 2.19 ), name="11" )
 
-	transmat = np.array([[ 0.10, 0.30, 0.60, 0, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0.30, 0.70, 0, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0.25, 0.70, 0.05, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0.30, 0.70, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.20, 0.80 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.00 ]])
+	states = [ s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11 ]
+	for state in states:
+		model.add_state( state )
 
-	covars = np.array([ [7.75],[1.15], [0.155],[0.352-.15],[0.427],[0.464],[0.8678],[0.533],[0.481],[1.46],   [2.19]] )
-	means = np.array( [ [40],  [29.1], [24.29],[26.04],    [23.8], [28.37],[26.8],  [25.4], [22.77],[28.06+1],[24.9] ] )
+	model.add_transition( model.start, s1, 0.10 )
+	model.add_transition( model.start, s2, 0.10 )
+	model.add_transition( model.start, s3, 0.70 )
+	model.add_transition( model.start, s4, 0.10 )
+	model.add_transition( s1, s1, 0.10 )
+	model.add_transition( s1, s2, 0.30 )
+	model.add_transition( s1, s3, 0.60 )
+	model.add_transition( s2, s2, 0.30 )
+	model.add_transition( s2, s3, 0.70 )
+	model.add_transition( s3, s3, 0.80 )
+	model.add_transition( s3, s4, 0.20 )
+	model.add_transition( s4, s4, 0.80 )
+	model.add_transition( s4, s5, 0.20 )
+	model.add_transition( s5, s5, 0.80 )
+	model.add_transition( s5, s6, 0.20 )
+	model.add_transition( s6, s6, 0.25 )
+	model.add_transition( s6, s7, 0.70 )
+	model.add_transition( s6, s8, 0.05 )
+	model.add_transition( s7, s7, 0.30 )
+	model.add_transition( s7, s8, 0.50 )
+	model.add_transition( s7, model.end, 0.20 )
+	model.add_transition( s8, s8, 0.70 )
+	model.add_transition( s8, s9, 0.20 )
+	model.add_transition( s8, model.end, 0.10 )
+	model.add_transition( s9, s9, 0.70 )
+	model.add_transition( s9, s10, 0.20 )
+	model.add_transition( s9, model.end, 0.10 )
+	model.add_transition( s10, s10, 0.10 )
+	model.add_transition( s10, s11, 0.80 )
+	model.add_transition( s10, model.end, 0.10 )
+	model.add_transition( s11, s11, 0.5 )
+	model.add_transition( s11, model.end, 0.5 )
 
-	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
-	hmm._means_ = means
-	hmm._covars_ = covars
-	hmm.colors = [ 'r', 'y', 'b', 'b', 'b', 'g', 'b', 'b', 'b', 'm', 'b' ]
-	return hmm
+	model.bake()
+	return model
 
-def tRNAbasic_A8T0H115():
-	n_components=11
-
-	startprob = np.array([ 0.20, 0.15, 0.55, 0.10, 0, 0, 0, 0, 0, 0, 0 ])
-
-	transmat = np.array([[ 0.10, 0.30, 0.60, 0, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0.30, 0.70, 0, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0.80, 0.20, 0, 0, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0.25, 0.70, 0.05, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0.30, 0.70, 0, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0.80, 0.20, 0 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.20, 0.80 ],
-						 [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.00 ]])
-
-	covars = np.array([ [7.75],[1.15], [0.155],[0.352-.15],[0.427],[0.464],[0.8678],[0.533],[0.481],[1.46],   [2.19]] )
-	means = np.array( [ [40],  [29.1], [24.29],[26.04],    [23.8], [28.37],[26.8],  [25.4], [22.77],[28.06+1],[24.9] ] )+5
-
-	hmm = NanoporeHMM( n_components=n_components, startprob=startprob, transmat=transmat )
-	hmm._means_ = means
-	hmm._covars_ = covars
-	hmm.colors = [ 'r', 'y', 'b', 'b', 'b', 'g', 'b', 'b', 'b', 'm', 'b' ]
-	return hmm
 
 def Bifurcator():
 	'''
 	Attempts to parse an ionic current sequence that bifurcates between two
-	ionic current states quickly, and many times. This assumes being fed 
-	superpoints which represent segmented states. 
+	ionic current states quickly, and many times.
 	'''
-	n_components = 2
-	startprob = np.array( [ 1, 0 ] )
-	transmat = np.array( [ [ .5, .5 ],
-						   [ .5, .5 ] ] )
-	means = np.array( [ [ 27.0 ], 
-	          			[ 33.0 ] ] )
-	covars = np.array( [ [ 1.0 ],
-			   		     [ 0.5 ] ] )
 
-	hmm = NanoporeHMM( n_components = n_components )
-	hmm.startprob = startprob
-	hmm.transmat = transmat
-	hmm._means_ = means
-	hmm._covars_ = covars
-	return hmm
+	model = Model( name="Bifurcator" )
+
+	s1 = State( NormalDistribution( 27.00, 1.00 ), name="1" )
+	s2 = State( NormalDistribution( 33.00, 0.50 ), name="2" )
+
+	model.add_state( s1 )
+	model.add_state( s2 )
+
+	model.add_transition( model.start, s1, 1.00 )
+	model.add_transition( s1, s1, 0.45 )
+	model.add_transition( s1, s2, 0.45 )
+	model.add_transition( s1, model.end, 0.10 )
+	model.add_transition( s2, s1, 0.45 )
+	model.add_transition( s2, s2, 0.45 )
+	model.add_transition( s2, model.end, 0.10 )
+
+	model.bake()
+	return model
 
 hmm_factory = { 'Abasic Finder': AbasicFinder(),
 		 		'Bifurcator': Bifurcator(),
 		 		'tRNAbasic_A8T0H11': tRNAbasic_A8T0H11(),
-		 		'tRNAbasic_A8T0H115' : tRNAbasic_A8T0H115() }
+		 	 }
