@@ -25,17 +25,6 @@ from PyPore.calignment import cSegmentAligner
 
 NEGINF = -999999999
 
-class SegmentScoreMixin( object ):
-	def _score( self, x, y ):
-		if x == '-' or y == '-':
-			return 0
-		t = np.max( ( x.mean-y.mean )**2 / ( x.std*y.std ) )
-		return 3 - t ** 2
-
-class DifferenceScoreMixin( object ):
-	def _score( self, x, y ):
-		return x == y 
-
 class SegmentAligner( object ):
 	'''
 	An aligner made to align ionic current segments based on mean, variance, and
@@ -120,16 +109,15 @@ class PairwiseAligner( object ):
 	'''
 
 	def __init__( self, x, y ):
-		if isinstance( x[0], Segment ) or isinstance( x[0], MetaSegment ):
-			self.__class__ = type( 'PairwiseSegmentAligner', ( PairwiseAligner, SegmentScoreMixin ), {} )
-		elif type( x[0] ) == str:
-			self.__class__ = type( 'PairwiseProteinAligner', ( PairwiseAligner, ProteinScoreMixin ), {} )
-		else:
-			self.__class__ = type( 'PairwiseDifferenceAligner', ( PairwiseAligner, DifferenceScoreMixin), {} )
 		self.x = x
 		self.y = y
 		self.m = len(self.x)
 		self.n = len(self.y)
+
+	def _score( self, x, y ):
+		if x == '-' or y == '-':
+			return 0
+		return 3 - abs( x - y ) ** 2
 
 	def dotplot( self ):
 		'''
@@ -193,7 +181,7 @@ class PairwiseAligner( object ):
 				xalign.append( self.x[i-1] )
 				yalign.append( '-' ) 
 				i -= 1
-		return ( xalign, yalign ), seq_score 
+		return seq_score, reversed(xalign), reversed(yalign) 
 
 
 	def global_alignment( self, penalty=-1 ):
@@ -260,7 +248,7 @@ class PairwiseAligner( object ):
 		while xalign[-1] == '-' or yalign[-1] == '-':
 			xalign = xalign[:-1]
 			yalign = yalign[:-1]
-		return (xalign, yalign), seq_score
+		return seq_score, reversed(xalign), reversed(yalign)
 
 	def _local_alignment_repeated_traceback( self, score, pointer, min_length ):
 		'''
@@ -304,7 +292,7 @@ class PairwiseAligner( object ):
 				while xalign[-1] == '-' or yalign[-1] == '-':
 					xalign = xalign[:-1]
 					yalign = yalign[:-1]
-				yield (xalign, yalign), seq_score
+				yield seq_score, reversed(xalign), reversed(yalign)
 
 
 	def local_repeated_alignment( self, penalty=-1, min_length=2 ):
@@ -357,18 +345,31 @@ class PSSM( object ):
 		if type(msa) is list and type(msa[0]) is not list:
 			msa = [ msa ]
 
+		for profile in msa:
+			if isinstance( profile, PSSM ):
+				msa = [ seq for seq in it.chain( msa, profile.msa ) ]
+
+		self.msa = msa
 		self.consensus = []
 		self.pssm = []
-		for column in it.izip( *msa ):
+
+		offset = 0
+		for i, column in enumerate( zip( *msa ) ):
 			column = filter( lambda x: x is not '-', column )
+
 			if len( column ) == 0:
+				for seq in self.msa:
+					del seq[i-offset]
+				offset += 1
 				continue
 
 			kd = KernelDensity( bandwidth=0.5 )
 			kd.fit( [ [ mean ] for mean in column ] )
 
+
 			self.pssm.append( kd.score )
 			self.consensus.append( np.mean( [mean for mean in column] ) )
+
 
 	def __getitem__( self, slice ):
 		'''
@@ -408,10 +409,23 @@ class ProfileAligner( object ):
         generalized as profile alignments in this manner.
 		'''
 
-		self.master = PSSM( master )
-		self.slave = PSSM( slave )
+		if not isinstance( master, PSSM ):
+			self.master = PSSM( master )
+		else:
+			self.master = master
 
-	def _build( self, pssm, low, high ):
+		if not isinstance( slave, PSSM ):
+			self.slave = PSSM( slave )
+		else:
+			self.slave = slave
+
+	def _build_global( self, pssm, low, high ):
+		'''
+		Build a profile HMM for finding global alignment on ionic current sequences, using a
+		uniform distribution to model the insert state, and Gaussian distributions to represent
+		the observed ionic current for each state.
+		'''
+
 		model = Model( name="Global Profile Aligner" )
 		insert_dist = UniformDistribution( low, high )
 		last_match = model.start
@@ -426,23 +440,172 @@ class ProfileAligner( object ):
 			insert = State( insert_dist, name="I"+str(i+1) )
 			delete = State( None, name="D"+str(i+1) )
 
-			model.add_transition( last_match, match, 0.50 )
-			model.add_transition( last_match, delete, 0.35 )
+			model.add_transition( last_match, match, 0.60 )
+			model.add_transition( last_match, delete, 0.25 )
 			model.add_transition( last_insert, match, 0.65 )
 			model.add_transition( last_insert, delete, 0.20 )
 			model.add_transition( delete, insert, 0.15 )
 			model.add_transition( insert, insert, 0.15 )
 			model.add_transition( match, insert, 0.15 )
 
-			if last_delete:
+			if last_delete is not None:
 				model.add_transition( last_delete, match, 0.65 )
 				model.add_transition( last_delete, delete, 0.20 )
 
 			last_match, last_insert, last_delete = match, insert, delete
 
-		model.add_transition( last_delete, model.end, 0.80 )
-		model.add_transition( last_insert, model.end, 0.80 )
+		model.add_transition( last_delete, model.end, 0.85 )
+		model.add_transition( last_insert, model.end, 0.85 )
 		model.add_transition( last_match, model.end, 0.85 )
+
+		model.bake()
+		return model
+
+	def _build_local( self, pssm, low, high ):
+		'''
+		Build a profile HMM for finding local alignment on ionic current sequences, using a
+		uniform distribution to model the insert state, and Gaussian distributions to represent
+		the observed ionic current for each state.
+		'''		
+
+		model = Model( name="Local Profile Aligner" )
+		insert_dist = UniformDistribution( low, high )
+		m = len( pssm )
+
+		# Build the beginning repeat of the HMM, representing sequence which does not align
+		# before the local alignment
+		start_insert = State( insert_dist, name="Q0" )
+		start_delete = State( None, name="P0" )
+		model.add_transition( model.start, start_insert, 0.5 )
+		model.add_transition( model.start, start_delete, 0.5 )
+		model.add_transition( start_insert, start_insert, 0.75 )
+		model.add_transition( start_insert, start_delete, 0.25 )
+
+		# Build the end repeat of the HMM, representing sequence which does not align after
+		# the local alignment
+		end_insert = State( insert_dist, name="QE" )
+		end_delete = State( None, name="PE" )
+
+		# Build the first column of the profile-repeat. 
+		last_match = State( LambdaDistribution( pssm[0] ), name="M0" )
+		last_insert = State( insert_dist, name="I0" )
+		last_delete = None
+		model.add_transition( last_match, last_insert, 0.15 )
+		model.add_transition( last_match, end_delete, 0.05 )
+		model.add_transition( last_insert, last_insert, 0.20 )
+		model.add_transition( start_delete, last_match, 1. / m )
+
+		# Iterate through the middle portion of the PSSM to build the profile repeat
+		for i, column in enumerate( pssm[1:-1] ):
+
+			# Generate new states for the three possibilities
+			match = State( LambdaDistribution( column ), name="M"+str(i+1) )
+			insert = State( insert_dist, name="I"+str(i+1) )
+			delete = State( None, name="D"+str(i+1) )
+
+			# Add in the appropriate transitions
+			model.add_transition( start_delete, match, 1. / m )
+			model.add_transition( last_match, match, 0.65 )
+			model.add_transition( last_match, delete, 0.15 )
+			model.add_transition( last_insert, delete, 0.20 )
+			model.add_transition( last_insert, match, 0.65 )
+			model.add_transition( insert, insert, 0.15 )
+			model.add_transition( delete, insert, 0.15 ) 
+			model.add_transition( match, insert, 0.15 )
+			model.add_transition( match, end_delete, 0.05 )
+
+			# Allow for there being no delete state in the first column
+			if last_delete is not None:
+				model.add_transition( last_delete, match, 0.65 )
+				model.add_transition( last_delete, delete, 0.20 )
+
+			# Shift over to the next column
+			last_match, last_insert, last_delete = match, insert, delete
+
+		# Add in the last match 
+		match = State( LambdaDistribution( pssm[-1] ), name="M"+str(i+2) )
+		model.add_transition( start_delete, match, 1. / m )
+		model.add_transition( last_match, match, 0.80 )
+		model.add_transition( last_insert, match, 0.85 )
+		model.add_transition( last_delete, match, 0.85 )
+		model.add_transition( match, end_delete, 1.00 )
+
+		model.add_transition( end_delete, end_insert, 0.5 )
+		model.add_transition( end_delete, model.end, 0.5 )
+		model.add_transition( end_insert, end_insert, 0.75 )
+		model.add_transition( end_insert, model.end, 0.25 )
+
+		model.bake()
+		return model
+
+	def _build_repeat( self, pssm, low, high ):
+		'''
+		Build a profile HMM for finding alignments among two sequences where the slave may have
+		additional tandem repeats built into it. A uniform distribution to model the insert state, 
+		and Gaussian distributions to represent the observed ionic current for each state.
+		'''		
+
+		model = Model( name="Local Profile Aligner" )
+		insert_dist = UniformDistribution( low, high )
+		m = len( pssm )
+
+		# Build the beginning repeat of the HMM, representing sequence which does not align
+		# before the local alignment
+		intermediate_insert = State( insert_dist, name="Q" )
+		start_delete = State( None, name="P0" )
+		end_delete = State( None, name="PE" )
+
+		model.add_transition( model.start, start_delete, 0.5 )
+		model.add_transition( model.start, intermediate_insert, 0.5 )
+		model.add_transition( intermediate_insert, intermediate_insert, 0.50 )
+		model.add_transition( intermediate_insert, start_delete, 0.25 )
+		model.add_transition( intermediate_insert, model.end, 0.25 )
+		model.add_transition( end_delete, intermediate_insert, 0.5 )
+		model.add_transition( end_delete, model.end, 0.5 )
+
+		# Build the first column of the profile-repeat. 
+		last_match = State( LambdaDistribution( pssm[0] ), name="M0" )
+		last_insert = State( insert_dist, name="I0" )
+		last_delete = None
+		model.add_transition( last_match, last_insert, 0.15 )
+		model.add_transition( last_match, end_delete, 0.05 )
+		model.add_transition( last_insert, last_insert, 0.20 )
+		model.add_transition( start_delete, last_match, 1. / m )
+
+		# Iterate through the middle portion of the PSSM to build the profile repeat
+		for i, column in enumerate( pssm[1:-1] ):
+
+			# Generate new states for the three possibilities
+			match = State( LambdaDistribution( column ), name="M"+str(i+1) )
+			insert = State( insert_dist, name="I"+str(i+1) )
+			delete = State( None, name="D"+str(i+1) )
+
+			# Add in the appropriate transitions
+			model.add_transition( start_delete, match, 1. / m )
+			model.add_transition( last_match, match, 0.65 )
+			model.add_transition( last_match, delete, 0.15 )
+			model.add_transition( last_insert, delete, 0.20 )
+			model.add_transition( last_insert, match, 0.65 )
+			model.add_transition( insert, insert, 0.15 )
+			model.add_transition( delete, insert, 0.15 ) 
+			model.add_transition( match, insert, 0.15 )
+			model.add_transition( match, end_delete, 0.05 )
+
+			# Allow for there being no delete state in the first column
+			if last_delete is not None:
+				model.add_transition( last_delete, match, 0.65 )
+				model.add_transition( last_delete, delete, 0.20 )
+
+			# Shift over to the next column
+			last_match, last_insert, last_delete = match, insert, delete
+
+		# Add in the last match 
+		match = State( LambdaDistribution( pssm[-1] ), name="M"+str(i+2) )
+		model.add_transition( start_delete, match, 1. / m )
+		model.add_transition( last_match, match, 0.80 )
+		model.add_transition( last_insert, match, 0.85 )
+		model.add_transition( last_delete, match, 0.85 )
+		model.add_transition( match, end_delete, 1.00 )
 
 		model.bake()
 		return model
@@ -453,34 +616,93 @@ class ProfileAligner( object ):
 		returning the probability of the alignment, and the two consensus alignments. 
 		'''
 
-		profile = self._build( self.master, low, high )
+		profile = self._build_global( self.master, low, high )
 		prob, states = profile.viterbi( self.slave.consensus )
 		
-		master = self.master.consensus
-		slave = self.slave.consensus
+		master = self.master
+		slave = self.slave
 
-		slave_aligned = []
-		master_aligned = []
-		i, j = 0, 0 
-		# Follow y's path through x, ignoring start and end state
-		for state in states[1:-1]:
+		# Follow the slave's path through the master, ignoring start and end state
+		for i, state in enumerate( states[1:-1] ):
 			sname = state[1].name
 
-			if sname.startswith( 'M' ):
-				slave_aligned.append( slave[i] )
-				master_aligned.append( master[j] )
-				i += 1
-				j += 1
-			elif sname.startswith( 'D' ):
-				slave_aligned.append( '-' )
-				master_aligned.append( master[j] )
-				j += 1
+			if sname.startswith( 'D' ):
+				slave.pssm.insert( i, '-' )
+				for seq in slave.msa:
+					seq.insert( i, '-' )
 			elif sname.startswith( 'I' ):
-				slave_aligned.append( slave[i] )
-				master_aligned.append( '-' )  
-				i += 1
+				master.pssm.insert( i, '-' )
+				for seq in master.msa:
+					seq.insert( i, '-' )  
 
-		return prob, master_aligned, slave_aligned
+		return prob, master, slave
+
+	def local_alignment( self, low=0, high=60 ):
+		'''
+		Perform a local alignment using a HMM. This aligns two profiles to each other,
+		returning the probability of the alignment, and the two consensus alignments, for the
+		highest scoring alignment.
+		'''
+
+		profile = self._build_local( self.master, low, high )
+		prob, states = profile.viterbi( self.slave.consensus )
+
+		master = self.master
+		slave = self.slave
+
+		first_match = True
+		offset = 0
+
+		# Follow the slave's path through master
+		for i, state in enumerate( states[1:-1] ):
+			sname = state[1].name
+
+			# If found first match, delete all sequence before that from the master
+			if sname.startswith( "M" ) and first_match:
+				first_match = False
+				offset = int( sname[1:] )
+				for j in xrange( offset ):
+					for seq in master.msa:
+						del seq[0]
+					del master.pssm[0]
+					del master.consensus[0]
+			
+			# If there is a deletion or insertion, add appropriate gaps
+			if sname.startswith( 'D' ):
+				slave.pssm.insert( i, '-' )
+				for seq in slave.msa:
+					seq.insert( i, '-' )
+			elif sname.startswith( 'I' ):
+				master.pssm.insert( i-offset, '-' )
+				for seq in master.msa:
+					seq.insert( i-offset, '-' )
+
+			# If reached the last sequence, cut off the remainder of the slave sequence
+			if sname is 'PE':
+				for i in xrange( len( states ) - i - 3 ):
+					for seq in slave.msa:
+						del seq[-1]
+				break
+
+		return prob, master, slave
+
+	def repeat_alignment( self, low=0, high=60 ):
+		'''
+		Repeat alignment
+		'''
+
+		profile = self._build_repeat( self.master, low, high )
+		prob, states = profile.viterbi( self.slave.consensus )
+
+		master = self.master
+		slave = self.slave
+
+		first_match = True
+
+		# Follow the slave's path through master
+		for i, state in enumerate( states[1:-1] ):
+			sname = state[1].name
+			print sname
 
 class MultipleSequenceAligner( object ):
 	def __init__( self, sequences ):
@@ -497,7 +719,7 @@ class MultipleSequenceAligner( object ):
 		score = sum( entropy( filter( lambda x: x is not '-', col ) ) for col in it.izip( *msa ) )
 		return score
 
-	def iterative_alignment( self, epsilon=1e-4, max_iterations=10 ):
+	def iterative_alignment( self, epsilon=1e-4, max_iterations=1 ):
 		'''
 		Perform a HMM-based iterative alignment. If an initial alignment is provided, will use that
 		to begin with, otherwise will simply use the sequences provided raw. This method will peel
@@ -507,18 +729,23 @@ class MultipleSequenceAligner( object ):
 		'''
 
 		# Unpack the initial sequences
-		best_msa = msa = self.sequences
+		msa = self.iterative_initialization()
+
+		score = self._score( msa )
+		if score == 0:
+			return 0, msa
 
 		n = len( msa )
 		# Give initial scores
-		score, last_score = float("-inf"), float("inf")
+		last_score = float('inf')
+		best_msa = { 'score': score, 'msa': msa }
 
 		# Until the scores converge...
 		iteration = 0
 		while abs( score-last_score ) >= epsilon and iteration < max_iterations:
 			iteration += 1
 			last_score = score
-			score = 0
+
 			# Run a full round of popping from the msa queue and enqueueing at the end
 			for i in xrange( n ):
 				# Pull a single 'master' sequence off the top of the msa queue
@@ -530,36 +757,30 @@ class MultipleSequenceAligner( object ):
 				# Perform the alignment using the HMM-based profile aligner
 				p, x, y = ProfileAligner( master, slave ).global_alignment()
 
-				# Add gaps to all sequences in the slave profile
-				master.append( y )
-				msa = master
-
-				m = max( map( len, msa ) )
-				for seq in msa:
-					seq.extend( ['-']*(m-len(seq) ) )
+				# Reattach the peeled sequence to the chain
+				msa = [ seq for seq in it.chain( x.msa, y.msa ) ]
 
 				# Calculate the score for this run
-				score += self._score( msa ) / float(n)
+				score = self._score( msa )
 
-			if score < last_score:
-				best_msa = msa
+				if score < best_msa['score']:
+					best_msa['score'], best_msa['msa'] = score, msa
 
-			print score
+		score, msa = best_msa['score'], best_msa['msa']
 
-		return score, best_msa
-
-	def progressive_initialization( self ):
-		offset, msa = 0, []
-		
-		for seq in self.sequences:
-			msa.append( ['-']*offset + seq )
-			offset += len(seq)
-
-		n = max( map( len, msa ) )
+		m = max( map( len, msa ) )
 		for seq in msa:
-			seq += ['-']*(n-len(seq))
+			seq.extend( ['-']*(m-len(seq) ) )
 
-		return msa
+		return score, msa
+
+	def iterative_initialization( self ):
+		pssm = PSSM( self.sequences[0] )
+		for seq in self.sequences[1:]:
+			p, master, slave = ProfileAligner( pssm, seq ).global_alignment()
+			pssm = PSSM( [ seq for seq in it.chain( master.msa, slave.msa ) ] )
+
+		return pssm.msa
 
 
 def NaiveTRF( seq, penalty=-1, min_score=2 ):
