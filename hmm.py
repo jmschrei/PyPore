@@ -12,6 +12,8 @@ that HMM.
 '''
 
 from yahmm import *
+import pyximport
+pyximport.install( setup_args={'include_dirs':np.get_include()})
 
 def AbasicFinder():
 	'''
@@ -44,19 +46,18 @@ def AbasicFinder():
 
 def tRNAbasic_A8T0H11():
 	model = Model( name="A8T0H115_Model")
-	model.colors = [ 'r', 'y', 'b', 'b', 'b', 'g', 'b', 'b', 'b', 'm', 'b' ]
 
-	s1 = State( NormalDistribution( 40, 7.75 ), name="1" )
-	s2 = State( NormalDistribution( 29.1, 1.15 ), name="2" )
-	s3 = State( NormalDistribution( 24.29, 0.155), name="3" )
-	s4 = State( NormalDistribution( 26.04, 0.352 ), name="4" )
-	s5 = State( NormalDistribution( 23.8, 0.427 ), name="5" )
-	s6 = State( NormalDistribution( 28.37, 0.464 ), name="6" )
-	s7 = State( NormalDistribution( 26.8, 0.8678 ), name="7" )
-	s8 = State( NormalDistribution( 25.4, 0.533 ), name="8" )
-	s9 = State( NormalDistribution( 22.77, 0.481 ), name="9" )
-	s10 = State( NormalDistribution( 30.06, 1.46 ), name="10" )
-	s11 = State( NormalDistribution( 24.9, 2.19 ), name="11" )
+	s1 = State( NormalDistribution( 40, 7.75 ), name="1", color='r' )
+	s2 = State( NormalDistribution( 29.1, 1.15 ), name="2", color='y' )
+	s3 = State( NormalDistribution( 24.29, 0.155), name="3", color='b' )
+	s4 = State( NormalDistribution( 26.04, 0.352 ), name="4", color='b' )
+	s5 = State( NormalDistribution( 23.8, 0.427 ), name="5", color='b' )
+	s6 = State( NormalDistribution( 28.37, 0.464 ), name="6", color='g' )
+	s7 = State( NormalDistribution( 26.8, 0.8678 ), name="7", color='b' )
+	s8 = State( NormalDistribution( 25.4, 0.533 ), name="8", color='b' )
+	s9 = State( NormalDistribution( 22.77, 0.481 ), name="9", color='b' )
+	s10 = State( NormalDistribution( 30.06, 1.46 ), name="10", color='m' )
+	s11 = State( NormalDistribution( 24.9, 2.19 ), name="11", color='b' )
 
 	states = [ s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11 ]
 	for state in states:
