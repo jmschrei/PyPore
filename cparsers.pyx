@@ -1,7 +1,7 @@
 import numpy as np
 cimport numpy as np
 
-from math import log
+from libc.math cimport log
 cimport cython
 
 from itertools import tee, izip, chain
@@ -16,7 +16,7 @@ cdef inline double mean_c( int start, int end, double [:] c ):
 
 @cython.boundscheck(False)
 cdef inline double var_c( int start, int end, double [:] c, double [:] c2 ):
-	return <double>0 if start == end else <double>(c2[end-1]/end - (c[end-1]/end)**2) if start == 0 else <double>((c2[end-1]-c2[start-1])/(end-start) - ((c[end-1]-c[start-1])/(end-start))**2)
+	return 0 if start == end else (c2[end-1]/end - (c[end-1]/end)**2) if start == 0 else ((c2[end-1]-c2[start-1])/(end-start) - ((c[end-1]-c[start-1])/(end-start))**2)
 
 def pairwise(iterable):
 	a, b = tee(iterable)
@@ -53,21 +53,21 @@ cdef class FastStatSplit:
 			return -1 
 		cdef double var_summed = (end - start) * log( var_c(start, end, self.c, self.c2) )
 		cdef double max_gain = self.min_gain_per_sample * self.window_width
-		cdef int i, x
+		cdef int i, x = -1
 		cdef double low_var_summed, high_var_summed, gain
-		x = -1
+
 		for i in xrange( start+self.min_width, end+1-self.min_width ):
-			low_var_summed = <double>(( i-start ) * log( var_c( start, i, self.c, self.c2 ) ))
-			high_var_summed = <double>(( end-i )  * log( var_c( i, end, self.c, self.c2 ) ))
-			gain = <double>(var_summed-( low_var_summed+high_var_summed ))
+			low_var_summed = ( i-start ) * log( var_c( start, i, self.c, self.c2 ) )
+			high_var_summed = ( end-i )  * log( var_c( i, end, self.c, self.c2 ) )
+			gain = var_summed-( low_var_summed+high_var_summed )
 			if gain > max_gain:
 				max_gain = gain
 				x = i
-		return <int>x
+		return x
 
 	cdef list _segment_cumulative( self, int start, int end ):
-		cdef int pseudostart, pseudoend, split_at
-		split_at = -1
+		cdef int pseudostart, pseudoend, split_at = -1
+
 		for pseudostart in xrange( start, end-2*self.min_width, self.window_width//2 ):
 			if pseudostart > start + self.max_width:
 				split_at = int_min( start+self.max_width, end-self.min_width )
