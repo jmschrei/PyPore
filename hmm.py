@@ -11,9 +11,9 @@ the bottom. Use the format that the string is the same as the name of the functi
 that HMM. 
 '''
 
-from yahmm import *
 import pyximport
 pyximport.install( setup_args={'include_dirs':np.get_include()})
+from yahmm import *
 
 def AbasicFinder():
 	'''
