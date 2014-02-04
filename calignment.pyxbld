@@ -1,7 +1,0 @@
-def make_ext(modname, pyxfilename):
-    from distutils.extension import Extension
-
-    # Auto-magically find numpy headers
-    import numpy
-    return Extension(name="calignment", sources=["calignment.pyx"],
-        include_dirs=[numpy.get_include()])
