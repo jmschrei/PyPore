@@ -11,6 +11,7 @@ the bottom. Use the format that the string is the same as the name of the functi
 that HMM. 
 '''
 
+import numpy as np
 import pyximport
 pyximport.install( setup_args={'include_dirs':np.get_include()})
 from yahmm import *
