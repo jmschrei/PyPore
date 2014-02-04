@@ -133,8 +133,6 @@ class Event( Segment ):
 
             self.segments = segments
 
-
-        print len( self.segments)
         self.n = len( self.segments )
         self.state_parser = parser
 
@@ -169,26 +167,19 @@ class Event( Segment ):
 
         if hmm:
             _, hmm_seq = self.apply_hmm( hmm )
-            if hasattr( hmm, 'colors' ):
-                color_cycle = [ hmm.colors[i] for i in hmm_seq ]
-            else:
-                color_cycle = [ 'rbgmcyk'[i%7] for i in hmm_seq ]
+            hmm_color_cycle = [ state.color if hasattr( state, "color" ) else 'k' for name, state in hmm_seq ]
 
         if 'color' in kwargs.keys():
             if kwargs['color'] == 'cycle':
                 color = [ 'brgc'[i%4] for i in xrange(self.n) ]
             elif kwargs['color'] == 'hmm':
                 if hmm:
-                    _, hmm_seq = self.apply_hmm( hmm )
-                    if hasattr( hmm, 'colors' ):
-                        color = [ hmm.colors[i] for i in hmm_seq ]
-                    else:
-                        color = 'k'
+                    color = hmm_color_cycle
             else:
                 color = kwargs['color']
             del kwargs['color']
         else:
-            color = 'b'
+            color = 'k'
 
         if len(color) == 1:
             if self.__class__.__name__ == "MetaEvent":
