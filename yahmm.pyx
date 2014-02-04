@@ -1,5 +1,6 @@
+#!/usr/bin/env python2.7
 # yahmm.py: Yet Another Hidden Markov Model library
-# Originally written by Adam Novak; additions and cython rewrite
+# Originally written by Adam Novak; modifications and incorporation into PyPore
 # by Jacob Schreiber
 
 """
@@ -330,6 +331,7 @@ BernoulliDistribution 0.4
     print model_b.forward([-0.5, 0.2, 1.2, 0.8]) # Possible
 
 """
+
 cimport cython
 from cython.view cimport array as cvarray
 from libc.math cimport log as clog, sqrt as csqrt
@@ -1717,6 +1719,12 @@ cdef class Model(object):
             return self.name
         def __set__( self, name ):
             self.name = name
+
+    property graph:
+        def __get__( self ):
+            return self.graph
+        def __set__( self, graph ):
+            self.graph = graph
 
     def __init__(self, name=None, start=None, end=None):
         """
