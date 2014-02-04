@@ -8,7 +8,6 @@ This module focuses on sequence alignment methods, including both dicrete alignm
 continuous alignment inputs, for pairwise and multiple sequence alignment. 
 '''
 
-from yahmm import *
 from sklearn.neighbors import KernelDensity
 
 import numpy as np
@@ -20,8 +19,9 @@ from parsers import *
 from DataTypes import *
 
 import pyximport
-pyximport.install()
+pyximport.install( setup_args={'include_dirs':np.get_include()})
 from PyPore.calignment import cSegmentAligner
+from yahmm import *
 
 NEGINF = -999999999
 
@@ -33,9 +33,9 @@ class SegmentAligner( object ):
 	'''
 	def __init__( self, model, skip_penalty, backslip_penalty ):
 		self.model = model
-		means = np.array([ seg.mean for seg in model.states ])
-		stds = np.array([ seg.std for seg in model.states ])
-		durs = np.array([ seg.duration for seg in model.states ])
+		means = np.array([ seg.mean for seg in model.segments ])
+		stds = np.array([ seg.std for seg in model.segments ])
+		durs = np.array([ seg.duration for seg in model.segments ])
 		self.aligner = cSegmentAligner( means, stds, durs, skip_penalty, backslip_penalty )
 
 	def align( self, seq ):
@@ -44,9 +44,9 @@ class SegmentAligner( object ):
 		If those are not properties of the segment, the alignment cannot be done.
 		'''
 		try:
-			means = np.array([ seg.mean for seg in seq.states ])
-			stds = np.array([ seg.std for seg in seq.states ])
-			durs = np.array([ seg.duration for seg in seq.states ])
+			means = np.array([ seg.mean for seg in seq.segments ])
+			stds = np.array([ seg.std for seg in seq.segments ])
+			durs = np.array([ seg.duration for seg in seq.segments ])
 			return self.aligner.align( means, stds, durs )
 		except ValueError:
 			return None, None
@@ -65,34 +65,34 @@ class SegmentAligner( object ):
 		m_start = 0
 		s_start = 0
 		while s_start < seq.n and m_start < model.n:
-			s_state = seq.states[s_start]
+			s_segment = seq.segments[s_start]
 			m = order[s_start]
-			m_state = model.states[m]
+			m_segment = model.segments[m]
 			next_s = s_start + 1
 
 			while next_s < seq.n and order[next_s] == m:
 				next_s += 1
 
 			if m < m_start:
-				duration = -sum( [ seg.duration for seg in model.states[m:m_start] ] )
-				segments.append( (start_time, duration, seq.states[s_start-1].mean, s_state.mean, 0 ) )
+				duration = -sum( [ seg.duration for seg in model.segments[m:m_start] ] )
+				segments.append( (start_time, duration, seq.segments[s_start-1].mean, s_segment.mean, 0 ) )
 				start_time += duration
 				m_start = m
 
-			total_seq_dur = sum( [ seg.duration for seg in seq.states[s_start:next_s] ] )
-			sum_model_dur = sum( [ seg.duration for seg in model.states[m_start:m] ] )
+			total_seq_dur = sum( [ seg.duration for seg in seq.segments[s_start:next_s] ] )
+			sum_model_dur = sum( [ seg.duration for seg in model.segments[m_start:m] ] )
 
-			dur = sum_model_dur + s_state.duration / total_seq_dur * m_state.duration
-			segments.append( ( start_time, dur, s_state.mean, s_state.mean, s_state.std ) )
+			dur = sum_model_dur + s_segment.duration / total_seq_dur * m_segment.duration
+			segments.append( ( start_time, dur, s_segment.mean, s_segment.mean, s_segment.std ) )
 			start_time += dur
 
-			remaining_m_dur = sum_model_dur + m_state.duration - dur
-			remaining_s_dur = total_seq_dur - s_state.duration
+			remaining_m_dur = sum_model_dur + m_segment.duration - dur
+			remaining_s_dur = total_seq_dur - s_segment.duration
 
 			for s_start in xrange( s_start+1, next_s ):
-				s_state = seq.states[s_start]
-				dur = s_state.duration / remaining_s_dur * remaining_m_dur
-				segments.append( ( start_time, dur, s_state.mean, s_state.mean, s_state.std ) )
+				s_segment = seq.segments[s_start]
+				dur = s_segment.duration / remaining_s_dur * remaining_m_dur
+				segments.append( ( start_time, dur, s_segment.mean, s_segment.mean, s_segment.std ) )
 				start_time += dur
 
 			m_start = m+1
@@ -363,11 +363,11 @@ class PSSM( object ):
 				offset += 1
 				continue
 
-			kd = KernelDensity( bandwidth=0.5 )
-			kd.fit( [ [ mean ] for mean in column ] )
+			#kd = KernelDensity( bandwidth=0.5 )
+			#kd.fit( [ [ mean ] for mean in column ] )
 
 
-			self.pssm.append( kd.score )
+			self.pssm.append( [ mean for mean in column ] )
 			self.consensus.append( np.mean( [mean for mean in column] ) )
 
 
@@ -436,7 +436,7 @@ class ProfileAligner( object ):
 		model.add_transition( last_insert, last_insert, 0.20 )
 
 		for i, column in enumerate( pssm ):
-			match = State( LambdaDistribution( column ), name="M"+str(i+1) ) 
+			match = State( GaussianKernelDensity( column ), name="M"+str(i+1) ) 
 			insert = State( insert_dist, name="I"+str(i+1) )
 			delete = State( None, name="D"+str(i+1) )
 
