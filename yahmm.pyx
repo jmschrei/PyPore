@@ -464,17 +464,15 @@ def log(value):
     Return the natural log of the given value, or - infinity if the value is 0.
     Can handle both scalar floats and numpy arrays.
     """
-    
-    if isinstance(value, float) or isinstance(value, int):
-        return _log( value )
-    else:
-        # Not a float, so assume it's a numpy array
-        # Take the log with -inf for 0, as described here:
-        # http://mail.scipy.org/pipermail/numpy-discussion/2010-September/
-        # 052647.html
-        
-        # We build up the answer vector using numpy conditionals
-        return _log_array( value )
+    if isinstance( value, numpy.ndarray ):
+        if len( value.shape ) > 1:
+            to_return = numpy.zeros(( value.shape ))
+            to_return[ value > 0 ] = numpy.log( value[ value > 0 ] )
+            to_return[ value == 0 ] = NEGINF
+            return to_return
+        else:
+            return _log_array( value )
+    return _log( value )
         
 def exp(value):
     """
@@ -573,7 +571,7 @@ cdef class Distribution(object):
     This is the name that should be used for serializing this distribution. May
     not contain newlines or spaces.
     """
-    cdef str name
+
     cdef list parameters
 
     property name:
@@ -788,15 +786,16 @@ cdef class NormalDistribution(Distribution):
         consider things equal to the mean.
         """
         
-        return self._log_probability( self.parameters[0], self.parameters[1], symbol, epsilon )
+        return self._log_probability( symbol, epsilon )
 
-    cdef double _log_probability( self, double mu, double theta, double symbol, double epsilon=1E-9 ):
+    cdef double _log_probability( self, double symbol, double epsilon=1E-9 ):
+        
+        cdef double mu = self.parameters[0], theta = self.parameters[1]
         if theta == 0:
             if abs( symbol - mu ) < epsilon:
                 return 0
             else:
                 return NEGINF
-
         return ( _log(1.0 / ( theta * SQRT_2_PI ) ) - ((symbol - mu) ** 2) / (2 * theta ** 2))        
             
             
@@ -893,8 +892,6 @@ cdef class ExponentialDistribution(Distribution):
         
         return log(self.parameters[0]) - self.parameters[0] * symbol
         
-            
-            
     def sample(self):
         """
         Sample from this exponential distribution and return the value
@@ -947,7 +944,7 @@ cdef class GammaDistribution(Distribution):
     was unable to find a good theoretical source for how to do it, so I have 
     cobbled together a solution here from less-reputable sources.
     """
-    
+
     property name:
         def __get__( self ):
             return "GammaDistribution"
@@ -971,8 +968,6 @@ cdef class GammaDistribution(Distribution):
             log(symbol) * (self.parameters[0] - 1) - 
             self.parameters[1] * symbol)
         
-            
-            
     def sample(self):
         """
         Sample from this gamma distribution and return the value sampled.
@@ -1072,8 +1067,6 @@ cdef class GammaDistribution(Distribution):
                 # Re-start at some random place.
                 new_shape = random.random()
                 
-                
-                
             iteration += 1
             
         # Might as well grab the new value
@@ -1111,7 +1104,7 @@ cdef class InverseGammaDistribution(GammaDistribution):
     InverseGammaDistribution 9.9756999562413196 0.4958491351206667
     
     """
-    
+
     property name:
         def __get__( self ):
             return "InverseGammaDistribution"
@@ -1131,8 +1124,6 @@ cdef class InverseGammaDistribution(GammaDistribution):
         
         return super(InverseGammaDistribution, self).log_probability(
             1.0 / symbol)
-        
-            
             
     def sample(self):
         """
@@ -1271,18 +1262,19 @@ cdef class GaussianKernelDensity( Distribution ):
     the sum of the Gaussian distance of the new point from every other point.
     """
 
+    cdef numpy.ndarray points
+
     property name:
         def __get__( self ):
             return "GaussianKernelDensity"
 
-    cdef numpy.ndarray points
-
-    def __init__( self, points ):
+    def __init__( self, points, bandwidth=1 ):
 
         # Take in the points which are in one dimension
-        self.points = numpy.array( points ) 
+        self.points = numpy.array( points )
+        self.parameters = [ points, bandwidth ]
 
-    def log_probability( self, symbol, bandwidth=1 ):
+    def log_probability( self, symbol ):
         """
         What's the probability of a given float under this distribution? It's
         the sum of the distances of the symbol from every point stored in the
@@ -1290,13 +1282,13 @@ cdef class GaussianKernelDensity( Distribution ):
         cython function which does math.
         """
 
-        return self._log_probability( symbol, bandwidth )
+        return self._log_probability( symbol )
 
-    cdef double _log_probability( self, double symbol, double bandwidth ):
+    cdef double _log_probability( self, double symbol ):
         """
         Actually calculate it here.
         """
-
+        cdef double bandwidth = self.parameters[1]
         cdef double s = 0, log_p, mu
         cdef int i = 0, n = len(self.points)
 
@@ -1307,6 +1299,13 @@ cdef class GaussianKernelDensity( Distribution ):
 
         return s
 
+    def from_sample( cls, items ):
+        """
+        Replace the points.
+        """
+
+        return cls( numpy.array( items ) )
+
 # Register the GaussianKernelDensity
 GaussianKernelDensity.register() 
 
@@ -1316,28 +1315,29 @@ cdef class UniformKernelDensity( Distribution ):
     one dimension. Takes in points at initialization, and calculates the log of
     the sum of the Gaussian distances of the new point from every other point.
     """
+    
+    cdef numpy.ndarray points
 
     property name:
         def __get__( self ):
             return "UniformKernelDensity"
 
-    cdef numpy.ndarray points
-
-    def __init__( self, points ):
+    def __init__( self, points, bandwidth=1 ):
 
         # Takes in the points which are in one dimension
         self.points = numpy.array( points )
+        self.parameters = [ points, bandwidth ]
 
-    def log_probability( self, symbol, bandwidth=1 ):
+    def log_probability( self, symbol ):
         """
         What's the probability ofa given float under this distribution? It's
         the sum of the distances from the symbol calculated under individual
         exponential distributions. A wrapper for the cython function.
         """
 
-        return self._log_probability( symbol, bandwidth )
+        return self._log_probability( symbol )
 
-    cdef _log_probability( self, double symbol, double bandwidth ):
+    cdef _log_probability( self, double symbol ):
         """
         Actually do math here.
         """
@@ -1347,10 +1347,17 @@ cdef class UniformKernelDensity( Distribution ):
 
         for i in xrange( n ):
             mu = self.points[i]
-            if abs( mu - symbol ) <= bandwidth:
+            if abs( mu - symbol ) <= self.parameters[1]:
                 s = s + 1
 
         return s
+    
+    def from_sample( cls, items ):
+        """
+        Replace the points.
+        """
+
+        return cls( numpy.array( items ) )
 
 # Register the UniformKernelDensity
 UniformKernelDensity.register()
@@ -1362,31 +1369,32 @@ cdef class TriangleKernelDensity( Distribution ):
     the sum of the Gaussian distances of the new point from every other point.
     """
 
+    cdef numpy.ndarray points
+
     property name:
         def __get__( self ):
             return "TriangleKernelDensity"
 
-    cdef numpy.ndarray points
-
-    def __init__( self, points ):
+    def __init__( self, points, bandwidth=1 ):
 
         # Takes in the points which are in one dimension
         self.points = numpy.array( points )
+        self.parameters = [ points, bandwidth ]
 
-    def log_probability( self, symbol, bandwidth=1 ):
+    def log_probability( self, symbol ):
         """
         What's the probability ofa given float under this distribution? It's
         the sum of the distances from the symbol calculated under individual
         exponential distributions. A wrapper for the cython function.
         """ 
 
-        return self._log_probability( symbol, bandwidth )
+        return self._log_probability( symbol )
 
-    cdef double _log_probability( self, double symbol, double bandwidth ):
+    cdef double _log_probability( self, double symbol ):
         """
         Actually do math here.
         """
-
+        cdef double bandwidth = self.parameters[1]
         cdef double s = 0, distance, mu
         cdef int i = 0, n = len( self.points )
 
@@ -1397,6 +1405,13 @@ cdef class TriangleKernelDensity( Distribution ):
                 s = s + ( bandwidth - distance )
 
         return s
+
+    def from_sample( cls, items ):
+        """
+        Replace the points.
+        """
+
+        return cls( numpy.array( items ) )
 
 # Register the TriangleKernelDensity
 TriangleKernelDensity.register()
@@ -1699,8 +1714,14 @@ cdef class Model(object):
     cdef str name
     cdef object start, end, graph
     cdef list states
-    cdef double [:,:] f, b, transition_log_probabilities
+    cdef double [:,:] f, b, v, transition_log_probabilities
     cdef int start_index, end_index, silent_start
+
+    property states:
+        def __get__( self ):
+            return self.states
+        def __set__( self, states ):
+            self.states = states
 
     property start:
         def __get__( self ):
@@ -1789,7 +1810,6 @@ cdef class Model(object):
         # initialized by self.backward.
         self.b = None
         '''
-        
     
     def __str__(self):
         """
@@ -1832,7 +1852,23 @@ cdef class Model(object):
         # Since the nodes in the graph are references to Python objects,
         # other.start and other.end and self.start and self.end still mean the
         # same State objects in the new combined graph.
+
+    def concatenate_model( self, other ):
+        """
+        Given another model, concatenate it in such a manner that you simply
+        add a transition of probability 1 from self.end to other.start, and
+        end at other.end.
+        """
+
+        # Unify the graphs (requiring disjoint states)
+        self.graph = networkx.union( self.graph, other.graph )
         
+        # Connect the two graphs
+        self.add_transition( self.end, other.start, 1.00 )
+
+        # Move the end to other.end
+        self.end = other.end
+
     def draw(self):
         """
         Draw this model's graph using NetworkX and matplotlib. Blocks until the
@@ -1844,8 +1880,7 @@ cdef class Model(object):
         
         networkx.draw(self.graph)
         pyplot.show()
-        
-        
+           
     def bake(self): 
         """
         Finalize the topology of the model, and assign a numerical index to
@@ -1900,7 +1935,7 @@ cdef class Model(object):
         # from a to b, where a and b are state indices. It starts out saying all
         # transitions are impossible.
         self.transition_log_probabilities = numpy.empty((len(self.states), 
-            len(self.states))) + NEGINF
+            len(self.states))) + float("-inf")
             
         for (a, b, data) in self.graph.edges_iter(data=True):
             # Put the edge in the dict. Its weight is log-probability
@@ -1958,9 +1993,25 @@ cdef class Model(object):
         return emissions
 
     def forward( self, sequence ):
+        '''
+        Python wrapper for the forward algorithm, calculating probability by
+        going forward through a sequence. 
+        '''
+
         return self._forward( numpy.array( sequence ) )
 
     cdef double _forward( self, sequence ):
+        """
+        Run the forward algorithm, and return the log probability of the given 
+        sequence. Sequence is a container of symbols.
+        
+        Initializes self.f, the forward algorithm DP table.
+        
+        Silent state handling stolen from p. 71 of "Biological Sequence 
+        Analysis" by Durbin et al., and works for anything that doesn't have 
+        loops of silent states.
+        """
+
         cdef unsigned int D_SIZE = sizeof( double )
         cdef int i = 0, k, l, n = len( sequence ), m = len( self.states )
         cdef double [:,:] f, e
@@ -1968,9 +2019,15 @@ cdef class Model(object):
         cdef State s
         cdef Distribution d
 
+        # Initialize the DP table. Each entry i, k holds the log probability of
+        # emitting i symbols and ending in state k, starting from the start
+        # state.
         f = cvarray( shape=(n+1, m), itemsize=D_SIZE, format='d' )
+        
+        # Initialize the emission table, which contains the probability of
+        # each entry i, k holds the probability of symbol i being emitted
+        # by state k 
         e = cvarray( shape=(n,self.silent_start), itemsize=D_SIZE, format='d') 
-        # Calculate the emission table
         for k in xrange( n ):
             for i in xrange( self.silent_start ):
                 s = <State>self.states[i]
@@ -1978,53 +2035,110 @@ cdef class Model(object):
                 log_probability = d.log_probability( sequence[k] )
                 e[k, i] = log_probability
 
+        # We must start in the start state, having emitted 0 symbols        
         for i in xrange(m):
             f[0, i] = NEGINF
         f[0, self.start_index] = 0
 
         for l in xrange( self.silent_start, m ):
+            # Handle transitions between silent states before the first symbol
+            # is emitted. No non-silent states have non-zero probability yet, so
+            # we can ignore them.
             if l == self.start_index:
+                # Start state log-probability is already right. Don't touch it.
                 continue
 
+            # This holds the log total transition probability in from 
+            # all current-step silent states that can have transitions into 
+            # this state.  
             log_probability = NEGINF
             for k in xrange( self.silent_start, l):
+                # For each current-step preceeding silent state k
                 log_probability = log_sum_exp( numpy.array([ log_probability,
                     f[0, k] + self.transition_log_probabilities[k, l]]))
+
+            # Update the table entry
             f[0, l] = log_probability
 
         for i in xrange( n ):
             for l in xrange( self.silent_start ):
+                # Do the recurrence for non-silent states l
+                # This holds the log total transition probability in from 
+                # all previous states
 
                 log_probability = NEGINF
                 for k in xrange( m ):
+                    # For each previous state k
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         f[i, k] + self.transition_log_probabilities[k, l]]))
+
+                # Now set the table entry for log probability of emitting 
+                # index+1 characters and ending in state l
                 f[i+1, l] = log_probability + e[i, l]
 
             for l in xrange( self.silent_start, m ):
-
+                # Now do the first pass over the silent states
+                # This holds the log total transition probability in from 
+                # all current-step non-silent states
                 log_probability = NEGINF
                 for k in xrange( self.silent_start ):
+                    # For each current-step non-silent state k
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         f[i+1, k] + self.transition_log_probabilities[k, l]]))
+
+                # Set the table entry to the partial result.
                 f[i+1, l] = log_probability
 
             for l in xrange( self.silent_start, m ):
-
+                # Now the second pass through silent states, where we account
+                # for transitions between silent states.
+                
+                # This holds the log total transition probability in from 
+                # all current-step silent states that can have transitions into 
+                # this state.
                 log_probability = NEGINF
                 for k in xrange( self.silent_start, l ):
+                    # For each current-step preceeding silent state k
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         f[i+1, k] + self.transition_log_probabilities[k, l]]))
+
+                # Add the previous partial result and update the table entry
                 f[i+1, l] = log_sum_exp( numpy.array([ f[i+1, l],
                     log_probability ]))
 
+        # Save the table for future use
+        self.f = f
+        # Now the DP table is filled in
+        # Just get the log-probability of being in the (silent) ending state
+        # at the end of the sequence
         return f[ n, self.end_index ]
 
 
     def backward( self, sequence ):
+        '''
+        Python wrapper for the backwards algorithm, where hidden states are
+        assigned to the sequence going from the end of the sequence to the
+        beginning.
+        '''
+
         return self._backward( numpy.array( sequence ) )
 
     cdef double _backward( self, numpy.ndarray sequence ):
+        """
+        Run the backward algorithm, and return the log probability of the given 
+        sequence. Sequence is a container of symbols.
+        
+        Initializes self.b, the backward algorithm DP table.
+        
+        Silent state handling is "essentially the same" according to Durbin et
+        al., so they don't bother to explain *how to actually do it*. 
+        
+        I've worked it out from first principles. TODO: there is probably a
+        better order so we don't have to repeat the "check all subsequent non-
+        silent states" loop for both silent and non-silent states on the current
+        step.
+        """
+
         cdef unsigned int D_SIZE = sizeof( double )
         cdef int i = 0, ir, k, kr, l, n = len( sequence ), m = len( self.states )
         cdef double [:,:] b, e
@@ -2032,9 +2146,17 @@ cdef class Model(object):
         cdef State s
         cdef Distribution d
 
+        # Initialize the DP table. Each entry i, k holds the log probability of
+        # emitting the remaining len(sequence) - i symbols and ending in the end
+        # state, given that we are in state k.
         b = cvarray( shape=(n+1, m), itemsize=D_SIZE, format='d' )
+
+        # Initialize the emission table, which contains the probability of
+        # each entry i, k holds the probability of symbol i being emitted
+        # by state k 
         e = cvarray( shape=(n,self.silent_start), itemsize=D_SIZE, format='d' )
 
+        # We must end in the end state, having emitted len(sequence) symbols
         for i in xrange(m):
             b[n, i] = NEGINF
         b[n, self.end_index] = 0
@@ -2052,67 +2174,155 @@ cdef class Model(object):
             # for this.
             k = m - kr - 1
 
+            # Do the silent states' dependencies on each other.
+            # Doing it in reverse order ensures that anything we can 
+            # possibly transition to is already done.
+            
             if k == self.end_index:
+                # We already set the log-probability for this, so skip it
                 continue
 
+            # This holds the log total probability that we go to
+            # current-step silent states and then continue from there to
+            # finish the sequence.
             log_probability = NEGINF
-
             for l in xrange( k+1, m ):
+                # For each possible current-step silent state we can go to,
+                # take into account just transition probability
                 log_probability = log_sum_exp( numpy.array([ log_probability,
                     b[n,l] + self.transition_log_probabilities[k, l]] ))
 
+            # Now this is the probability of reaching the end state given we are
+            # in this silent state.
             b[n, k] = log_probability
 
         for k in xrange( self.silent_start ):
+            # Do the non-silent states in the last step, which depend on
+            # current-step silent states.
+            
+            # This holds the total accumulated log probability of going
+            # to such states and continuing from there to the end.
             log_probability = NEGINF
             for l in xrange( self.silent_start, m ):
+                # For each current-step silent state, add in the probability
+                # of going from here to there and then continuing on to the
+                # end of the sequence.
                 log_probability = log_sum_exp( numpy.array([ log_probability,
                     b[n, l] + self.transition_log_probabilities[k, l]] ))
 
+            # Now we have summed the probabilities of all the ways we can
+            # get from here to the end, so we can fill in the table entry.
             b[n, k] = log_probability
 
+        # Now that we're done with the base case, move on to the recurrence
+        
+        # We want to enumerate the list backward without making a copy.
+        # See http://christophe-simonis-at-tiny.blogspot.com/2008/08/python-
+        # reverse-enumerate.html
         for ir in xrange( n ):
+            # Cython xranges cannot go backwards properly, redo to handle
+            # it properly
             i = n - ir - 1
             for kr in xrange( m-self.silent_start ):
                 k = m - kr - 1
 
+                # Do the silent states' dependency on subsequent non-silent
+                # states, iterating backwards to match the order we use later.
+                
+                # This holds the log total probability that we go to some
+                # subsequent state that emits the right thing, and then continue
+                # from there to finish the sequence.
                 log_probability = NEGINF
                 for l in xrange( self.silent_start ):
+                    # For each subsequent non-silent state l, take into account
+                    # transition and emission emission probability.
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         b[i+1, l] + self.transition_log_probabilities[k, l] +
                         e[i, l]]))
 
+                # We can't go from a silent state here to a silent state on the
+                # next symbol, so we're done finding the probability assuming we
+                # transition straight to a non-silent state.
                 b[i, k] = log_probability
 
             for kr in xrange( m-self.silent_start ):
                 k = m - kr - 1
 
+                # Do the silent states' dependencies on each other.
+                # Doing it in reverse order ensures that anything we can 
+                # possibly transition to is already done.
+                
+                # This holds the log total probability that we go to
+                # current-step silent states and then continue from there to
+                # finish the sequence.
                 log_probability = NEGINF
                 for l in xrange( k+1, m ):
+                    # For each possible current-step silent state we can go to,
+                    # take into account just transition probability
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         b[i, l] + self.transition_log_probabilities[k, l] ]))
 
+                # Now add this probability in with the probability accumulated
+                # from transitions to subsequent non-silent states.
                 b[i, k] = log_sum_exp( numpy.array([ log_probability, b[i, k] ]))
 
             for k in xrange( self.silent_start ):
-
+                # Do the non-silent states in the current step, which depend on
+                # subsequent non-silent states and current-step silent states.
+                
+                # This holds the total accumulated log probability of going
+                # to such states and continuing from there to the end.
                 log_probability = NEGINF
                 for l in xrange( self.silent_start ):
+                    # For each subsequent non-silent state l, take into account
+                    # transition and emission emission probability.
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         b[i+1, l] + self.transition_log_probabilities[k,l] +
                         e[i, l]] ))
 
                 for l in xrange( self.silent_start, m ):
+                    # For each current-step silent state, add in the probability
+                    # of going from here to there and then continuing on to the
+                    # end of the sequence.
                     log_probability = log_sum_exp( numpy.array([ log_probability,
                         b[i, l] + self.transition_log_probabilities[k, l] ]))
 
+                # Now we have summed the probabilities of all the ways we can
+                # get from here to the end, so we can fill in the table entry.
                 b[i, k] = log_probability
+
+        # Save the DP table for future use
+        self.b = b
+
+        # Now the DP table is filled in. Just get the log-probability of
+        # emitting all the symbols of the sequence, given we are in the (silent)
+        # starting state.
         return b[0, self.start_index]
 
     def viterbi(self, sequence):
+        '''
+        A python wrapper for the viterbi algorithm, finding the highest
+        probability path from the start of the hmm to the end given
+        a sequence. 
+        '''
+
         return self._viterbi(  numpy.array( sequence ) )
  
     cdef tuple _viterbi(self, numpy.ndarray sequence):
+        """
+        Run the Viterbi algorithmwhich finds the maximum-likelihood path that
+        emits the given sequence. Returns either a tuple of the path's
+        likelihood and the path itself, or (-inf, None) if the sequence is
+        impossible under the model. If a path is returned, it is a list of
+        tuples of the form (sequence index, state object).
+        
+        This fills in self.v, the Viterbi algorithm DP table.
+        
+        This is fundamentally the same as the forward algorithm using max
+        instead of sum, except the traceback is more complicated, because silent
+        states in the current step can trace back to other silent states in the
+        current step as well as states in the previous step.
+        """
         cdef unsigned int I_SIZE = sizeof( int ), D_SIZE = sizeof( double )
 
         cdef unsigned int n = sequence.shape[0], m = len(self.states)
@@ -2124,8 +2334,19 @@ cdef class Model(object):
         cdef Distribution d
         cdef State s
 
+        # Initialize the DP table. Each entry i, k holds the log probability of
+        # emitting i symbols and ending in state k, starting from the start
+        # state, along the most likely path.
         v = cvarray( shape=(n+1,m), itemsize=D_SIZE, format='d' )
+
+        # Initialize the emission table, which contains the probability of
+        # each entry i, k holds the probability of symbol i being emitted
+        # by state k 
         e = cvarray( shape=(n,self.silent_start), itemsize=D_SIZE, format='d' )
+
+        # Initialize two traceback matricies. Each entry in tracebackx points
+        # to the x index on the v matrix of the next entry. Same for the
+        # tracebacky matrix.
         tracebackx = cvarray( shape=(n+1,m), itemsize=I_SIZE, format='i' )
         tracebacky = cvarray( shape=(n+1,m), itemsize=I_SIZE, format='i' )
 
@@ -2136,77 +2357,126 @@ cdef class Model(object):
                 p = d.log_probability( sequence[k] )
                 e[k, i] = p
 
+        # We catch when we trace back to (0, self.start_index), so we don't need
+        # a traceback there.
         for i in xrange( m ):
             v[0, i] = NEGINF
         v[0, self.start_index] = 0
+        # We must start in the start state, having emitted 0 symbols
 
         for l in xrange( self.silent_start, m ):
+            # Handle transitions between silent states before the first symbol
+            # is emitted. No non-silent states have non-zero probability yet, so
+            # we can ignore them.
             if l == self.start_index:
+                # Start state log-probability is already right. Don't touch it.
                 continue
 
             for k in xrange( self.silent_start, l ):
+                # For each current-step preceeding silent state k
+                # This holds the log-probability coming that way
                 state_log_probability = v[0, k] + \
                     self.transition_log_probabilities[k, l]
 
                 if state_log_probability > v[0, l]:
+                    # New winner!
                     v[0, l] = state_log_probability
                     tracebackx[0, l] = 0
                     tracebacky[0, l] = k
 
         for i in xrange( n ):
             for l in xrange( self.silent_start ):
+                # Do the recurrence for non-silent states l
+                # Start out saying the best likelihood we have is -inf
                 v[i+1, l] = NEGINF
                 
                 for k in xrange( m ):
+                    # For each previous state k
+                    # This holds the log-probability coming that way
                     state_log_probability = v[i, k] + \
                         self.transition_log_probabilities[k, l] + e[i, l]
 
                     if state_log_probability > v[i+1, l]:
+                        # Best to come from there to here
                         v[i+1, l] = state_log_probability
                         tracebackx[i+1, l] = i
                         tracebacky[i+1, l] = k
 
             for l in xrange( self.silent_start, m ):
+                # Now do the first pass over the silent states, finding the best
+                # current-step non-silent state they could come from.
+                # Start out saying the best likelihood we have is -inf
                 v[i+1, l] = NEGINF
 
                 for k in xrange( self.silent_start ):
+                    # For each current-step non-silent state k
+                    # This holds the log-probability coming that way
                     state_log_probability = v[i+1, k] + \
                         self.transition_log_probabilities[k, l]
 
                     if state_log_probability > v[i+1, l]:
+                        # Best to come from there to here
                         v[i+1, l] = state_log_probability
                         tracebackx[i+1, l] = i+1
                         tracebacky[i+1, l] = k
 
             for l in xrange( self.silent_start, m ):
+                # Now the second pass through silent states, where we check the
+                # silent states that could potentially reach here and see if
+                # they're better than the non-silent states we found.
+
                 for k in xrange( self.silent_start, l ):
+                    # For each current-step preceeding silent state k
+                    # This holds the log-probability coming that way
                     state_log_probability = v[i+1, k] + \
                         self.transition_log_probabilities[k, l]
 
                     if state_log_probability > v[i+1, l]:
+                        # Best to come from there to here
                         v[i+1, l] = state_log_probability
                         tracebackx[i+1, l] = i+1
                         tracebacky[i+1, l] = k
 
+        # Now the DP table is filled in Get the log-probability of being in the
+        # (silent) ending state at the end of the sequence, having followed the
+        # ML path. This is the log-probability of the ML path given the model.
         cdef double log_likelihood = v[n, self.end_index]
 
+        # Save the viterbi matrix for future use
+        self.v = v
+
         if log_likelihood == NEGINF:
+            # The path is impossible, so don't even try a traceback. 
             return ( log_likelihood, None )
 
+        # Otherwise, do the traceback
+        # This holds the path, which we construct in reverse order
         cdef list path = []
         cdef int px = n, py = self.end_index, npx
 
+        # This holds our current position (character, state) AKA (i, k).
+        # We start at the end state
         while px != 0 or py != self.start_index:
+            # Until we've traced back to the start...
+            # Put the position in the path, making sure to look up the state
+            # object to use instead of the state index.
             path.append( ( px, self.states[py] ) )
+
+            # Go backwards
             npx = tracebackx[px, py]
             py = tracebacky[px, py]
             px = npx
 
+        # We've now reached the start (if we didn't raise an exception because
+        # we messed up the traceback)
+        # Record that we start at the start
         path.append( (px, self.states[py] ) )
+
+        # Flip the path the right way around
         path.reverse()
+
+        # Return the log-likelihood and the right-way-arounded path
         return ( log_likelihood, path )
-
-
 
     def write(self, stream):
         """
@@ -2410,6 +2680,7 @@ cdef class Model(object):
         Always trains for at least min_iterations.
         """
         
+        sequences = numpy.array( sequences )
         # What's the current log score?
         log_score = self.train_once(sequences,
             transition_pseudocount=transition_pseudocount)
@@ -2422,7 +2693,7 @@ cdef class Model(object):
         while improvement > stop_threshold or iteration < min_iterations:
             
             # train again and get the new score
-            new_log_score = self.train_once(sequences, 
+            new_log_score = self._train_once(sequences, 
                 transition_pseudocount=transition_pseudocount)
             
             iteration += 1
@@ -2453,6 +2724,7 @@ cdef class Model(object):
         possible but never observed.
         """        
         
+        transition_log_probabilities = numpy.array( self.transition_log_probabilities ) 
         # Find the expected number of transitions between each pair of states, 
         # given our data and our current parameters, but allowing the paths 
         # taken to vary. (Indexed: from, to)
@@ -2482,7 +2754,7 @@ cdef class Model(object):
             
             
             # Add to the score
-            log_score = log_sum_exp((log_score, log_sequence_probability))
+            log_score = log_sum_exp( numpy.array([log_score, log_sequence_probability]))
             
             # Fill in self.b too
             self.backward(sequence)
@@ -2504,12 +2776,12 @@ cdef class Model(object):
                         # Add probability that we start and get up to state k, 
                         # and go k->l, and emit the symbol from l, and go from l
                         # to the end.
-                        log_transition_emission_probability_sum = log_sum_exp((
-                            log_transition_emission_probability_sum,
+                        log_transition_emission_probability_sum = log_sum_exp(
+                            numpy.array([ log_transition_emission_probability_sum,
                             self.f[index, k] + 
-                            self.transition_log_probabilities[k, l] + 
+                            transition_log_probabilities[k, l] + 
                             self.states[l].distribution.log_probability(
-                            symbol) + self.b[index + 1, l]))
+                            symbol) + self.b[index + 1, l] ]))
                     
                     # Now divide by probability of the sequence to make it given
                     # this sequence, and add as this sequence's contribution to 
@@ -2533,11 +2805,12 @@ cdef class Model(object):
                         # and go k->l, and go from l to the end. In this case, 
                         # we use forward and backward entries from the same DP 
                         # table row, since no character is being emitted.
-                        log_transition_emission_probability_sum = log_sum_exp((
+                        log_transition_emission_probability_sum = log_sum_exp(
+                            numpy.array([
                             log_transition_emission_probability_sum,
                             self.f[index, k] + 
-                            self.transition_log_probabilities[k, l] + 
-                            + self.b[index, l]))
+                            transition_log_probabilities[k, l] + 
+                            + self.b[index, l] ]))
                     
                     # Now divide by probability of the sequence to make it given
                     # this sequence, and add as this sequence's contribution to 
@@ -2579,7 +2852,7 @@ cdef class Model(object):
         
         # Only modifies transitions for states a transition was observed from.
         # Work in log space
-        self.transition_log_probabilities[row_norms != 0, :] = (
+        transition_log_probabilities[row_norms != 0, :] = (
             log(expected_transitions[row_norms != 0, :])  -
             log(row_norms[row_norms != 0][:, numpy.newaxis]))
                     
@@ -2595,4 +2868,118 @@ cdef class Model(object):
         # distributions.
         
         # Return the log total probability of all sequences (log score)
+        self.transition_log_probabilities = transition_log_probabilities
         return log_score
+
+    cdef double _train_once( self, numpy.ndarray sequences, 
+        double transition_pseudocount ):
+        """
+        DO NOT USE. DOES NOT WORK.
+        """
+
+        cdef unsigned int D_SIZE = sizeof( double )
+        cdef int n, m = len( self.states ), i=0, k=0, l=0, j=0
+        cdef double log_score = NEGINF, log_sequence_probability
+        cdef double log_transition_emission_probability_sum, p
+        cdef double [:,:] expected_transitions, e
+        cdef list emission_weights = []
+        cdef list emitted_symbols  = []
+        cdef State s
+        cdef Distribution d
+
+        for i in xrange( self.silent_start ):
+            emission_weights.append( [] )
+
+        expected_transitions = cvarray( (m,m), itemsize=D_SIZE, format='d' )
+
+        for i in xrange( len(sequences) ):
+            n = len( sequences[i] )
+
+            e = cvarray( shape=(n,self.silent_start), itemsize=D_SIZE, format='d' )
+            for k in xrange( n ):
+                for l in xrange( self.silent_start ):
+                    s = <State>self.states[l]
+                    d = <Distribution>(s.distribution)
+                    e[k, l] = d.log_probability( sequences[i][k] )
+
+            log_sequence_probability = self.forward( sequences[i] )
+
+            if log_sequence_probability == NEGINF:
+                print "Warning: skipped impossible sequence {}".format( 
+                    sequences[i] )
+                continue
+            
+            log_score = log_sum_exp( numpy.array([ log_score, 
+                log_sequence_probability ]) )
+
+            self.backward( sequences[i] )
+
+            for k in xrange( n ):
+                emitted_symbols.append( sequences[i][k] )
+
+            for k in xrange( m ):
+                for l in xrange( self.silent_start ):
+                    log_transition_emission_probability_sum = NEGINF
+
+                    for j in xrange( n ):
+                        log_transition_emission_probability_sum = log_sum_exp(
+                            numpy.array([ log_transition_emission_probability_sum,
+                                self.f[j, k] +
+                                self.transition_log_probabilities[k, l] +
+                                e[j, l] + self.b[j+1, l] ]) )
+
+                    expected_transitions[k, l] += exp(
+                        log_transition_emission_probability_sum - 
+                        log_sequence_probability )
+
+                for l in xrange( self.silent_start, m ):
+                    log_transition_emission_probability_sum = NEGINF
+
+                    for j in xrange( n+1 ):
+                        log_transition_emission_probability_sum = log_sum_exp(
+                            numpy.array([ log_transition_emission_probability_sum,
+                                self.f[j, k] +
+                                self.transition_log_probabilities[k, l] +
+                                self.b[j, l] ]))
+
+                    expected_transitions[k, l] += exp(
+                        log_transition_emission_probability_sum -
+                        log_sequence_probability )
+
+                if k < self.silent_start:
+                    for j in xrange( n ):
+                        weight = exp( self.f[j+1, k] + self.b[j+1, k] -
+                            log_sequence_probability )
+
+                        emission_weights[k].append( weight )
+
+
+        row_norms = numpy.array( expected_transitions ).sum(axis=1)
+
+        # THERE IS SOMETHING WRONG HERE. I DON'T KNOW WHAT IT IS. PLEASE DO NOT USE.
+        # Only modifies transitions for states a transition was observed from.
+        # Work in log space
+        cdef numpy.ndarray tlp = numpy.array( self.transition_log_probabilities )
+        cdef numpy.ndarray et = numpy.array( expected_transitions )
+
+        tlp[row_norms != 0, :] = ( log(et[row_norms != 0, :]) - log(row_norms[row_norms != 0][:, numpy.newaxis] ) )
+
+        #self.transition_log_probabilities = tlp
+        '''
+        cdef double row_norm
+        for i in xrange( m ):
+            row_norm = sum( expected_transitions[i] )
+            if row_norm != 0:
+                for j in xrange( len(expected_transitions[i]) ):
+                    self.transition_log_probabilities[j, i] = _log( 
+                        expected_transitions[j, i] ) - _log( row_norm )
+
+        for k in xrange( self.silent_start ):
+            self.states[k].distribution.from_sample( emitted_symbols,
+                weights=emission_weights[k] )
+        '''
+        return log_score
+
+
+
+
