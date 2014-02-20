@@ -51,9 +51,19 @@ class Event( Segment ):
     file containing useful data. 
     '''
 
-    def __init__( self, current, start, file ):
-        Segment.__init__( self, current, file=file, duration=current.shape[0]/file.second, 
-                          filtered=False, start =start/file.second, segments=[], sample=None, n=0 )
+    def __init__( self, current, start=0, file=None, segments=[], **kwargs ):
+        # If a file is provided, divide the time into seconds appropriately
+        if file is not None:
+            start /= file.second
+            duration = len(current) / file.second
+
+        # If segments are provided, set an appropriate duration 
+        if len(segments) > 0:
+            duration = sum( seg.duration for seg in segments )
+
+        Segment.__init__( self, current, duration=duration, filtered=False, 
+            start=start, segments=segments, sample=None, file=file, **kwargs )            
+
          
     def filter( self, order=1, cutoff=2000. ):
         '''
@@ -133,7 +143,6 @@ class Event( Segment ):
 
             self.segments = segments
 
-        self.n = len( self.segments )
         self.state_parser = parser
 
     def delete( self ):
@@ -167,19 +176,47 @@ class Event( Segment ):
 
         if hmm:
             _, hmm_seq = self.apply_hmm( hmm )
-            hmm_color_cycle = [ state.color if hasattr( state, "color" ) else 'k' for name, state in hmm_seq ]
+            hmm_color_cycle = [ state.color if hasattr( state, "color" ) else 'k' 
+                for name, state in hmm_seq if not state.is_silent() ]
 
-        if 'color' in kwargs.keys():
-            if kwargs['color'] == 'cycle':
+        if 'color' in kwargs.keys(): # If the user has specified a coloring scheme..
+            color_arg = kwargs['color'] # Pull out the coloring scheme
+            
+            if color_arg == 'cycle': # Use a 4-color rotating cycle on the segments
                 color = [ 'brgc'[i%4] for i in xrange(self.n) ]
-            elif kwargs['color'] == 'hmm':
+            
+            elif color_arg == 'hmm': # Color using the hidden states of the HMM
                 if hmm:
                     color = hmm_color_cycle
+
+            elif color_arg == 'model': # Color by the models in the HMM 
+                color, labels, i, new_model = [], [], 0, False
+                cycle = [ 'b', 'r', 'c', 'k', 'y', 'm', '0.25', 'g', '0.75' ] 
+                for index, state in hmm_seq:
+                    if not state.is_silent():
+                        color.append( cycle[i%9] )
+                        if not new_model:
+                            labels.append( None )
+                        new_model = False
+                    elif state.name.endswith( "-start" ):
+                        labels.append( state.name[:-6] )
+                        new_model = True
+                        i += 1
             else:
                 color = kwargs['color']
+
             del kwargs['color']
         else:
             color = 'k'
+
+        # Set appropriate labels 
+        if 'label' in kwargs.keys():
+            if isinstance( label, str ):
+                labels = [ kwargs['label'] ]
+            else:
+                labels = kwargs['label']
+        elif color_arg != 'model':
+            labels = []
 
         if len(color) == 1:
             if self.__class__.__name__ == "MetaEvent":
@@ -187,25 +224,33 @@ class Event( Segment ):
                 y_high = lambda z: self.mean + z * self.std
                 y_low = lambda z: self.mean - z * self.std
                 plt.plot( x, ( self.mean, self.mean ), color=color, **kwargs )
-                plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.6 )
-                plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.4 )
-                plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.2 )
+                plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.80 )
+                plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.30 )
+                plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.15 )
             else:
-                plt.plot( np.arange(0, self.duration, 1./self.file.second), self.current, color=color, **kwargs )
+                plt.plot( np.arange(0, self.duration, 1./self.file.second), 
+                    self.current, color=color, **kwargs )
         else:
-            for c, segment in it.izip( color, self.segments ):
-                if isinstance( segment, MetaSegment ):
+            for c, segment, l in it.izip_longest( color, self.segments, labels ):
+                if self.__class__.__name__ == "MetaEvent":
                     x = ( segment.start, segment.duration+segment.start )
                     y_high = lambda z: segment.mean + z * segment.std
                     y_low = lambda z: segment.mean - z * segment.std
-                    plt.plot( x, (segment.mean, segment.mean), color=c, **kwargs )
-                    plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.6 )
-                    plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.4 )
-                    plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.2 )
+                    plt.plot( x, (segment.mean, segment.mean), color=c, label=l, **kwargs )
+                    plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.80 )
+                    plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
+                    plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
                 else:
-                    plt.plot( np.arange(0, segment.duration, 1./self.file.second)+segment.start, segment.current, color=c, **kwargs )
+                    plt.plot( np.arange(0, segment.duration, 1./self.file.second)+segment.start, 
+                        segment.current, color=c, label=l, **kwargs )
 
-        plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
+        if len(labels) > 0:
+            plt.legend()
+        try:
+            plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
+        except:
+            plt.title( "Event at {time}s".format( time=self.start ))
+
         plt.xlabel( "Time (s)" )
         plt.ylabel( "Current (pA)" )
         plt.grid( color='gray', linestyle=':' )
@@ -259,20 +304,25 @@ class Event( Segment ):
         if 'current' not in d.keys():
             event.__class__ = type("MetaEvent", (MetaSegment,), d )
         else:
-            event = Event( d['current'], d['start'], )
+            event = cls( d['current'], d['start'], )
+
+        return event
 
     @classmethod
-    def from_segments( cls, *segments ):
+    def from_segments( cls, segments ):
         try:
             current = np.concatenate( [seg.current for seg in segments] )
-            Segment.__init__( self, current=current, segments=segments, sample=None, n=len(segments) )
+            return cls( current=current, start=0, segments=segments )
+
         except AttributeError:
             dur = sum( seg.duration for seg in segments )
-            mean = np.mean( seg.mean*seg.duration for seg in segments ) / dur
-            std = np.sqrt( sum( seg.std ** 2 * seg.duration ) / dur )  
-            MetaSegment.__init__( self, segments=segments, sample=None, n=len(segments),
-                                  duration=dur, mean=mean, std=std )
-            self.__class__ = type( "MetaEvent", (Event,), cls.__dict__ )
+            mean = np.mean([ seg.mean*seg.duration for seg in segments ]) / dur
+            std = np.sqrt( sum( seg.std ** 2 * seg.duration for seg in segments ) / dur )
+
+            self = cls( current=np.array([ seg.mean for seg in segments ]), start=0, 
+                segments=segments, mean=mean, std=std )
+            self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
+            return self
 
     @classmethod
     def from_database( cls, database, host, password, user, AnalysisID, SerialID ):
@@ -290,6 +340,10 @@ class Event( Segment ):
 
         Event.from_segments( cls, segments )
 
+    @property
+    def n( self ):
+        return len( self.segments )
+
 class File( Segment ):
     '''
     A container for the raw ionic current pulled from a .abf file, and metadata as to
@@ -299,7 +353,7 @@ class File( Segment ):
         timestep, current = read_abf( filename )
         filename = filename.split("\\")[-1].split(".abf")[0]
         Segment.__init__( self, current=current, filename=filename, second=1000./timestep, 
-                                events=[], sample=None, n=0 )
+                                events=[], sample=None )
 
     def __getitem__( self, index ):
         return self.events[ index ]
@@ -311,7 +365,6 @@ class File( Segment ):
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
         self.events = [ Event( current=seg.current, start=seg.start, file=self ) for seg in parser.parse( self.current ) ]
-        self.n = len( self.events )
         self.event_parser = parser
         del self.current
 
@@ -404,22 +457,19 @@ class File( Segment ):
         file.events = []
 
         for _json in d['events']:
-            s, e = _json['start']*file.second, _json['end']*file.second
+            s, e = int(_json['start']*file.second), int(_json['end']*file.second)
 
             event = Event( current=file.current[ s:e ], start=s, file=file )
 
             if _json['filtered']:
                 event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
 
-            event.segments = [ Segment( current=event.current[ s_json['start']*file.second : s_json['end']*file.second ],
+            event.segments = [ Segment( current=event.current[ int(s_json['start']*file.second) : int(s_json['end']*file.second) ],
                                         second=file.second, event=event, start=s_json['start']*file.second )
                                                                 for s_json in _json['segments'] ]
             event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
-            event.n = _json['n']
             event.filtered = _json['filtered']
             file.events.append( event )
-
-        file.n = d['n']
 
         return file
 
@@ -461,6 +511,7 @@ class File( Segment ):
         query = np.array( db.read( "SELECT ID, SerialID, start, end FROM Events \
                                     WHERE AnalysisID = {0}".format(AnalysisID) ) )
         EventID, SerialID, starts, ends = query[:, 0], query[:, 1], query[:, 2], query[:,3]
+        starts, ends = map( int, starts ), map( int, ends )
         
         file.parse( parser=MemoryParse( starts, ends ) )
 
@@ -554,6 +605,10 @@ class File( Segment ):
                                                                     seg.std,
                                                                    ) 
                 db.execute( "INSERT INTO Segments " + values )
+
+    @property
+    def n( self ):
+        return len( self.events )
 
 
 class Experiment( Container ):
