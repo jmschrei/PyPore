@@ -21,7 +21,7 @@ class MetaSegment( object ):
 			setattr( self, key, value )
 
 		if hasattr( self, "current" ):
-			self.n = self.current.shape[0]
+			self.n = len( self.current )
 			self.mean = np.mean( self.current )
 			self.std = np.std( self.current )
 			self.min = np.min( self.current )
@@ -89,7 +89,6 @@ class Segment( object ):
 		if already known. Cannot override statistical measurements. 
 		'''
 		self.current = current
-		self.n = current.shape[0] 
 		for key, value in kwargs.iteritems():
 			if hasattr( self, key ):
 				continue
@@ -150,6 +149,10 @@ class Segment( object ):
 	@property
 	def end( self ):
 		return self.start + self.duration
+	@property
+	def n( self ):
+		return len( self.current )
+
 
 	@classmethod
 	def from_json( self, filename=None, json=None ):
