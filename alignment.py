@@ -19,7 +19,7 @@ from parsers import *
 from DataTypes import *
 
 import pyximport
-pyximport.install( setup_args={'include_dirs':np.get_include()})
+pyximport.install( setup_args={'include_dirs':np.get_include()} )
 from PyPore.calignment import cSegmentAligner
 from yahmm import *
 
@@ -31,23 +31,19 @@ class SegmentAligner( object ):
 	duration. The algorithm currently used is written by Dr. Kevin Karplus as a
 	semi-local alignment along the sequence. 
 	'''
-	def __init__( self, model, skip_penalty, backslip_penalty ):
-		self.model = model
-		means = np.array([ seg.mean for seg in model.segments ])
-		stds = np.array([ seg.std for seg in model.segments ])
-		durs = np.array([ seg.duration for seg in model.segments ])
-		self.aligner = cSegmentAligner( means, stds, durs, skip_penalty, backslip_penalty )
 
-	def align( self, seq ):
+	def __init__( self, model_means, model_stds, model_durs, skip_penalty, backslip_penalty ):
+		self.aligner = cSegmentAligner( model_means, model_stds, model_durs, 
+			skip_penalty, backslip_penalty )
+
+	def align( self, seq_means, seq_stds, seq_durs ):
 		'''
 		Unpack the mean, standard deviation, and duration from the segment sequence.
 		If those are not properties of the segment, the alignment cannot be done.
 		'''
+
 		try:
-			means = np.array([ seg.mean for seg in seq.segments ])
-			stds = np.array([ seg.std for seg in seq.segments ])
-			durs = np.array([ seg.duration for seg in seq.segments ])
-			return self.aligner.align( means, stds, durs )
+			return self.aligner.align( seq_means, seq_stds, seq_durs )
 		except ValueError:
 			return None, None
 
@@ -57,6 +53,7 @@ class SegmentAligner( object ):
 		the duration of some segments to match the model. Mean and std remain 
 		the same.
 		'''
+
 		if seq == None or order == None:
 			return None
 		model = self.model 
@@ -124,8 +121,8 @@ class PairwiseAligner( object ):
 		Returns a matrix giving the similarity between every i, j point in the matrix. This is a
 		symmetric matrix. 
 		'''
-		score = np.zeros(( self.m+1, self.n+1 ))
 
+		score = np.zeros(( self.m+1, self.n+1 ))
 		for i in xrange( 1, self.m+1 ):
 			for j in xrange( 1, self.n+1 ):
 				score[i, j] = self._score( self.x[i-1], self.y[j-1] )
@@ -137,6 +134,7 @@ class PairwiseAligner( object ):
 		Creates an alignment matrix according to the Needleman-Wunch global alignment algorithm
 		between two sequences. It will return the raw score matrix and the pointer matrix. 
 		'''
+
 		# Initialize the matrix
 		score = np.zeros( ( self.m+1, self.n+1 ) )
 		pointer = np.zeros( ( self.m+1, self.n+1 ) )
@@ -163,6 +161,7 @@ class PairwiseAligner( object ):
 		Follows a traceback, starting at the bottom right corner and working back, according to
 		global alignment. 
 		'''
+
 		i, j = pointer.shape[0] - 1, pointer.shape[1] - 1
 		seq_score = score[i, j]
 		xalign, yalign = [], []
@@ -189,6 +188,7 @@ class PairwiseAligner( object ):
 		Client access to the global alignment methods. This will take in a penalty term
 		and align the two sequences passed in upon initialization.
 		'''
+
 		score, pointer = self._global_alignment_matrix( penalty=penalty )
 		return self._global_alignment_traceback( score, pointer )
 
@@ -198,9 +198,9 @@ class PairwiseAligner( object ):
 		Creates an alignment matrix according to the Smith-Waterman global alignment algorithm
 		between two sequences. It will return the raw score matrix and the pointer matrix. 
 		'''
+
 		score = np.zeros( ( self.m+1, self.n+1 ) )
 		pointer = np.zeros( ( self.m+1, self.n+1 ) )
-
 		for i in xrange( 1, self.m+1 ):
 			for j in xrange( 1, self.n+1 ):
 				idx_scores = (     0,
@@ -218,8 +218,8 @@ class PairwiseAligner( object ):
 		Follows a traceback, starting at the highest score function anywhere in the matrix, working
 		back until it hits a 0 in the score matrix.
 		'''
-		xalign, yalign = [], []
 
+		xalign, yalign = [], []
 		argmax = np.argmax( score )
 		i, j = argmax/(self.n+1), argmax%(self.n+1)
 
@@ -256,6 +256,7 @@ class PairwiseAligner( object ):
 		back until it hits a 0 in the score matrix. It will repeat this process, zeroing out every
 		alignment that it pulls out, pulling sequences in order of score.
 		'''
+
 		while True:
 			xalign, yalign = [], []
 
@@ -300,6 +301,7 @@ class PairwiseAligner( object ):
 		Client function for the local repeated alignment. Performs Smith-Waterman on the two
 		stored sequences, then returns all alignments in order of score.
 		'''
+
 		score, pointer = self._local_alignment_matrix( penalty )
 		return self._local_alignment_repeated_traceback( score, pointer, min_length )
 
@@ -308,6 +310,7 @@ class PairwiseAligner( object ):
 		Client function for the local repeated alignment. Performs Smith-Waterman on the two
 		stored sequences, then returns the best alignment anywhere in the matrix.
 		'''
+
 		score, pointer = self._local_alignment_matrix( penalty )
 		return self._local_alignment_traceback( score, pointer )
 
@@ -321,6 +324,7 @@ class RepeatFinder( object ):
     WARNING: If the underlying sequence does contain tandem repeats, do not use this class, or
     at least try to seperate out the tandem repeats beforehand. 
     '''
+
     def __init__( self, sequence ):
     	pass
 
@@ -394,7 +398,7 @@ class PSSM( object ):
 
 
 class ProfileAligner( object ):
-	def __init__( self, master, slave ):
+	def __init__( self, master, slave, bandwidth=1 ):
 		'''
 		Must take in a PSSM object or a list of whatever is being aligned. Both x and y must be a
 		list of at least one list, where each inner list represents a sequence. For example:
@@ -409,6 +413,7 @@ class ProfileAligner( object ):
         generalized as profile alignments in this manner.
 		'''
 
+		self.bandwidth = bandwidth
 		if not isinstance( master, PSSM ):
 			self.master = PSSM( master )
 		else:
@@ -436,7 +441,7 @@ class ProfileAligner( object ):
 		model.add_transition( last_insert, last_insert, 0.20 )
 
 		for i, column in enumerate( pssm ):
-			match = State( GaussianKernelDensity( column ), name="M"+str(i+1) ) 
+			match = State( GaussianKernelDensity( column, self.bandwidth ), name="M"+str(i+1) ) 
 			insert = State( insert_dist, name="I"+str(i+1) )
 			delete = State( None, name="D"+str(i+1) )
 
@@ -487,7 +492,7 @@ class ProfileAligner( object ):
 		end_delete = State( None, name="PE" )
 
 		# Build the first column of the profile-repeat. 
-		last_match = State( LambdaDistribution( pssm[0] ), name="M0" )
+		last_match = State( GaussianKernelDensity( pssm[0], self.bandwidth ), name="M0" )
 		last_insert = State( insert_dist, name="I0" )
 		last_delete = None
 		model.add_transition( last_match, last_insert, 0.15 )
@@ -499,7 +504,7 @@ class ProfileAligner( object ):
 		for i, column in enumerate( pssm[1:-1] ):
 
 			# Generate new states for the three possibilities
-			match = State( LambdaDistribution( column ), name="M"+str(i+1) )
+			match = State( GaussianKernelDensity( column, self.bandwidth ), name="M"+str(i+1) )
 			insert = State( insert_dist, name="I"+str(i+1) )
 			delete = State( None, name="D"+str(i+1) )
 
@@ -523,7 +528,7 @@ class ProfileAligner( object ):
 			last_match, last_insert, last_delete = match, insert, delete
 
 		# Add in the last match 
-		match = State( LambdaDistribution( pssm[-1] ), name="M"+str(i+2) )
+		match = State( GaussianKernelDensity( pssm[-1], self.bandwidth ), name="M"+str(i+2) )
 		model.add_transition( start_delete, match, 1. / m )
 		model.add_transition( last_match, match, 0.80 )
 		model.add_transition( last_insert, match, 0.85 )
@@ -564,7 +569,7 @@ class ProfileAligner( object ):
 		model.add_transition( end_delete, model.end, 0.5 )
 
 		# Build the first column of the profile-repeat. 
-		last_match = State( LambdaDistribution( pssm[0] ), name="M0" )
+		last_match = State( GaussianKernelDensity( pssm[0], self.bandwidth ), name="M0" )
 		last_insert = State( insert_dist, name="I0" )
 		last_delete = None
 		model.add_transition( last_match, last_insert, 0.15 )
@@ -576,7 +581,7 @@ class ProfileAligner( object ):
 		for i, column in enumerate( pssm[1:-1] ):
 
 			# Generate new states for the three possibilities
-			match = State( LambdaDistribution( column ), name="M"+str(i+1) )
+			match = State( GaussianKernelDensity( column, self.bandwidth ), name="M"+str(i+1) )
 			insert = State( insert_dist, name="I"+str(i+1) )
 			delete = State( None, name="D"+str(i+1) )
 
@@ -600,7 +605,7 @@ class ProfileAligner( object ):
 			last_match, last_insert, last_delete = match, insert, delete
 
 		# Add in the last match 
-		match = State( LambdaDistribution( pssm[-1] ), name="M"+str(i+2) )
+		match = State( GaussianKernelDensity( pssm[-1], self.bandwidth ), name="M"+str(i+2) )
 		model.add_transition( start_delete, match, 1. / m )
 		model.add_transition( last_match, match, 0.80 )
 		model.add_transition( last_insert, match, 0.85 )
@@ -705,8 +710,9 @@ class ProfileAligner( object ):
 			print sname
 
 class MultipleSequenceAligner( object ):
-	def __init__( self, sequences ):
+	def __init__( self, sequences, bandwidth=1 ):
 		self.sequences = sequences
+		self.bandwidth = bandwidth
 
 	def _score( self, msa ):
 		'''
@@ -716,10 +722,10 @@ class MultipleSequenceAligner( object ):
 		'''
 
 		entropy = lambda col: 0.5*math.log( 2*np.pi*np.e*np.std( col )**2 ) if len(col) > 1 and np.std(col) > 0 else 0
-		score = sum( entropy( filter( lambda x: x is not '-', col ) ) for col in it.izip( *msa ) )
+		score = sum( 1. / ( len(col)-col.count('-') )**2 * entropy( filter( lambda x: x is not '-', col ) ) for col in it.izip( *msa ) )
 		return score
 
-	def iterative_alignment( self, epsilon=1e-4, max_iterations=1 ):
+	def iterative_alignment( self, epsilon=1e-4, max_iterations=10, bandwidth=1 ):
 		'''
 		Perform a HMM-based iterative alignment. If an initial alignment is provided, will use that
 		to begin with, otherwise will simply use the sequences provided raw. This method will peel
@@ -727,60 +733,62 @@ class MultipleSequenceAligner( object ):
 		method until there is little change in the score for a full round of iteration. The scoring 
 		mechanism is done by minimum entropy.
 		'''
-
+		import sys
 		# Unpack the initial sequences
-		msa = self.iterative_initialization()
+		score, msa = self.iterative_initialization( bandwidth=bandwidth )
 
-		score = self._score( msa )
 		if score == 0:
 			return 0, msa
 
 		n = len( msa )
 		# Give initial scores
 		last_score = float('inf')
-		best_msa = { 'score': score, 'msa': msa }
+		best_msa, best_score = msa, score
 
 		# Until the scores converge...
 		iteration = 0
-		while abs( score-last_score ) >= epsilon and iteration < max_iterations:
+		while abs( best_score-last_score ) >= epsilon and iteration < max_iterations:
 			iteration += 1
-			last_score = score
-
+			last_score = best_score
 			# Run a full round of popping from the msa queue and enqueueing at the end
 			for i in xrange( n ):
 				# Pull a single 'master' sequence off the top of the msa queue
-				slave = filter( lambda x: x is not '-', msa[0] )
+				slave = filter( lambda x: x is not '-', best_msa[i] )
 
 				# Make the rest of them slaves
-				master = msa[1:]
+				master = best_msa[:i] + best_msa[i+1:]
 
 				# Perform the alignment using the HMM-based profile aligner
-				p, x, y = ProfileAligner( master, slave ).global_alignment()
+				p, x, y = ProfileAligner( master=master, slave=slave, 
+					bandwidth=bandwidth ).global_alignment()
 
 				# Reattach the peeled sequence to the chain
 				msa = [ seq for seq in it.chain( x.msa, y.msa ) ]
 
 				# Calculate the score for this run
 				score = self._score( msa )
+				if score < best_score:
+					best_msa, best_score = msa, score
 
-				if score < best_msa['score']:
-					best_msa['score'], best_msa['msa'] = score, msa
-
-		score, msa = best_msa['score'], best_msa['msa']
-
-		m = max( map( len, msa ) )
-		for seq in msa:
+		m = max( map( len, best_msa ) )
+		for seq in best_msa:
 			seq.extend( ['-']*(m-len(seq) ) )
 
-		return score, msa
+		return score, best_msa
 
-	def iterative_initialization( self ):
+	def iterative_initialization( self, bandwidth=1 ):
+		'''
+		Create an initial MSA using an iterative alignment procedure of aligning
+		new sequences one at a time. 
+		'''
+
 		pssm = PSSM( self.sequences[0] )
 		for seq in self.sequences[1:]:
-			p, master, slave = ProfileAligner( pssm, seq ).global_alignment()
+			p, master, slave = ProfileAligner( master=pssm, 
+				slave=seq, bandwidth=bandwidth ).global_alignment()
 			pssm = PSSM( [ seq for seq in it.chain( master.msa, slave.msa ) ] )
 
-		return pssm.msa
+		return self._score( pssm.msa), pssm.msa
 
 
 def NaiveTRF( seq, penalty=-1, min_score=2 ):
