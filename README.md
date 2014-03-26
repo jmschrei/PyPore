@@ -23,7 +23,7 @@ There are several core datatypes implemented in order to speed up analysis. Thes
 ### Files
 
 * **Attributes**: duration, mean, std, min, max, n *(# events)*, second, current, sample, events, event_parser, filename
-* **Instance Methods**: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password )
+* **Instance Methods**: parse( parser ), delete(), to\_meta(), to\_json( filename ), to\_dict(), to\_database( database, host, user, password ), plot( color_events )
 * **Class Methods**: from\_json( filename ), from\_database( ... )  
 
 Nanopore data files consist primarily of current levels corresponding to ions passing freely through the nanopore ("open channel"), and a blockages as something passes through the pore, such as a DNA strand ("events"). Data from nanopore experiments are stored in Axon Binary Files (extension .abf), as a sequence 32 bit floats, and supporting information about the hardware. They can be opened and loaded with the following:
@@ -38,10 +38,21 @@ The File class contains many methods to simplify the analysis of these files. Th
 ```
 from PyPore.DataTypes import *
 file = File( "My_File.abf" )
-file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+file.parse( parser=lambda_event_parser( threshold=50 ) ) 
 ```
 
-The events are now stored as Event objects in file.events. The only other important file methods involve loading and saving them to a cache, which we'll cover later. Files also have the properties mean, std, and n (number of events). 
+The events are now stored as Event objects in file.events. The only other important file methods involve loading and saving them to a cache, which we'll cover later. Files also have the properties mean, std, and n (number of events). If we wanted to look at what it thought were events, we could use the plot method. By default, this method will plot detected events in a different color. 
+
+```
+from PyPore.DataTypes import *
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=50 ) ) 
+file.plot()
+```
+
+![](https://lh3.googleusercontent.com/-YGRe4s_XqNc/UzMuY3CeasI/AAAAAAAAABM/bbyXkXUFj1E/w1598-h332-no/file_plot.png)
+
+Given that a file is huge, only every 100th point is used in the black regions, and every 5th point is used in events. This may lead to some problems, such as there are two regions which seem like they should be called events, but are colored black and not cyan. This is because in reality, there are spikes below 0 in each of these segments, and the parsing method filtered out any events which went below 0 pA at any point. However, the downsampling removed this spike (because it was less than 100 points long).  
 
 ### Events
 
@@ -60,13 +71,17 @@ from PyPore.DataTypes import *
 from matplotlib import pyplot as plt
 
 file = File( "My_File.abf" )
-file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+file.parse( parser=lambda_event_parser( threshold=50 ) ) 
 
 for event in file.events:
     event.filter( order=1, cutoff=2000 )
     event.plot()
     plt.show()
 ```
+
+![](https://lh3.googleusercontent.com/-VtVrNVUmiJ8/UzMwn559UqI/AAAAAAAAABk/tZqoOYw_PMk/w800-h547-no/event_plot.png)
+
+The first event plotted in this loop is shown.
 
 Currently, *lambda_event_parser* and *MemoryParse* are the most used File parsers. MemoryParse takes in two lists, one of starts of events, and one of ends of events, and will cut a file into it's respective events. This is useful if you've done an analysis before and remember where the split points are. 
 
@@ -75,6 +90,32 @@ The plot command will draw the event on whatever canvas you have, allowing you t
 ```
 event.plot( alpha=0.5, marker='o' ) 
 ```
+
+![](https://lh4.googleusercontent.com/-f3OE4YU4vv0/UzMxSzAi2eI/AAAAAAAAACI/m1R6XYzyZyE/w800-h547-no/event_plot_mod.png)
+
+This plot doesn't look terrible good, and takes longer to plot, but it is possible to do!
+
+Subplot handling is extremely easy. All of the plotting commands plot to whichever canvas is currently open, allowing for you to do something like this:
+
+```
+from PyPore.DataTypes import *
+from matplotlib import pyplot as plt
+
+file = File( "My_File.abf" )
+file.parse( parser=lambda_event_parser( threshold=50 ) ) 
+
+for event in file.events:
+    plt.subplot(211)
+    event.plot()
+    plt.subplot(212)
+    event.filter()
+    event.plot()
+    plt.show()
+```
+
+![](https://lh6.googleusercontent.com/-X3R3tlF1AYs/UzMyLzQI8hI/AAAAAAAAACc/bPLbVLY28xc/w800-h547-no/event_plot_comp.png)
+
+This plot shows how easy it is to show a comparison between an event which is not filtered versus one which is filtered.
 
 The next step is usually to try to segment this event into it's discrete states. There are several segmenters which have been written to do this, of which currently *StatSplit is the best, written by Dr. Kevin Karplus and based on a recursive maximum likelihood algorithm.  This algorithm was sped up by rewritting it in Cython, leading to *SpeedyStatSplit, which is a python wrapper for the cython code. Segmenting an event is the same process as detecting events in a file, by using the parse method on an event and passing in a parser.
 
@@ -85,7 +126,7 @@ from PyPore.DataTypes import *
 from matplotlib import pyplot as plt
 
 file = File( "My_File.abf" )
-file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+file.parse( parser=lambda_event_parser( threshold=50 ) ) 
 
 for event in file.events:
     event.filter( order=1, cutoff=2000 )
@@ -94,9 +135,13 @@ for event in file.events:
     plt.show()
 ```
 
+![](https://lh3.googleusercontent.com/-DkJuj7bJLl4/UzMy3EvOP5I/AAAAAAAAACs/VMgr513sYq8/w800-h547-no/event_seg.png)
+
+The color cycle goes blue-red-green-cyan.
+
 The most reliable segmenter currently is *SpeedyStatSplit*. For more documentation on the parsers, see the parsers segment of this documentation. Both Files and Events inherit from the Segment class, described below. This means that any of the parsers will work on either files or events.
 
-The last core functionality is the ability to apply an hidden markov model (HMM) to an event, and see which segments correspond to which hidden states. Any hmm (or more complex model!) can be used as long as it has a predict method (like sklearn hmms), but the PyPore.hmm module gives a core class, NanoporeHMM, and several examples, of how to make an hmm that will be useful. Let's say that we're dealing with an event that appears to switch between a high current state and a low current state, corresponding to a DNA strand ratcheting back and forth between two nucleotides. In order to try to group these segments, I've written an HMM named Bifurcator which will classify these segments as belonging to one group or the other. I want to visualize it's performance! 
+The last core functionality is the ability to apply an hidden markov model (HMM) to an event, and see which segments correspond to which hidden states. HMM functionality is made possible through the use of the yahmm class, which has a Model class and a viterbi method, which is called to find the best path through the HMM. A good example of one of these HMMs is tRNAbasic or tRNAbasic2, which were both made for this purpose. Lets say we want to compare the two HMMs to see which one we agree with more. 
 
 ```
 from PyPore.DataTypes import *
@@ -104,17 +149,34 @@ from PyPore.hmm import Bifurcator
 from matplotlib import pyplot as plt
 
 file = File( "My_File.abf" )
-file.parse( parser=lambda_event_parser( threshold=110 ) ) 
+file.parse( lambda_event_parser( threshold=50 ) )
 
-for event in file.events:
-    event.filter( order=1, cutoff=2000 )
-    event.parse( parser=SpeedyStatSplit( min_gain_per_sample=0.50 ) )
-    event.apply_hmm( hmm=Bifurcator )
-    event.plot( color='hmm' )
-    plt.show()
+for i, event in enumerate( file.events ):
+	event.filter()
+	event.parse( SpeedyStatSplit( min_gain_per_sample=.2 ) )
+	plt.subplot( 411 )
+	event.plot( color='cycle' )
+	
+	plt.subplot( 412 )
+	event.plot( color='hmm', hmm=tRNAbasic() )
+	
+	plt.subplot( 413 )
+	event.plot( color='hmm', hmm=tRNAbasic2() )
+
+	plt.subplot( 414 )
+	plt.imshow( [ np.arange(11) ], interpolation='nearest', cmap="Set1" )
+	plt.grid( False )
+
+	means = [ 33, 29.1, 24.01, 26.04, 24.4, 29.17, 27.1, 25.7, 22.77, 30.06, 24.9 ]
+	for i, mean in enumerate( means ):
+		plt.text( i-0.2, 0.1, str(mean), fontsize=16 )
+
+	plt.show()
 ```
 
-You'll see that I had to import Bifurcator from the hmm module. By just using the event apply_hmm method, I can apply the hmm with minimal effort, and by coloring by 'hmm', segments will now be colored according to which hidden state in the HMM they correspond to. 
+![](https://lh4.googleusercontent.com/-6fXyFjSiunw/UzM0J7WLl7I/AAAAAAAAADE/77-4iBsnWRY/w1598-h811-no/event_hmm_apply.png)
+
+You'll notice that the title of an image and the xlabel of the image above it will always conflict. This is unfortunate, but an acceptable consequence in my opinion. If you're making more professional grade images, you may need to go in and manually fix this conflict. We see the original segmentation on the top, the first HMM applied next, and the second HMM on the bottom. The color coding of each HMM hidden state (sequentially) along with the mean ionic current of their emission distribution are shown at the very bottom. We see that the bottom HMM seems to progress more sequentially, progressing to the purple state instead of regressing back to the blue-green state in the middle of the trace. It also does not go backwards to the yellow state once it's in the gold state later on in the trace. It seems like a more robust HMM, and this way of comparing them is super easy to do.
 
 Event objects also have the properties start, end, duration, mean, std, and n (number of segments after segmentation has been performed). 
 
@@ -177,6 +239,59 @@ These parsers were intended to be use for event detection. They include:
 ### Misc.
 
 * *MemoryParser( starts, ends )* : This parser is mostly used internally in order to load up saved analyses, however it is available for all to use. The starts of segments, and the ends, are provided in a list with the *i*-th element of starts and ends correspond to the *i*-th segment you wish to make. This can be used for event detection or segmentation.
+
+# HMMs
+
+### Making HMMs
+
+You should use the yahmm package to make a HMM. This has been sped up both by hacking the code a little, and by converting it from python to cython, leading to a speed up on the viterbi path of approximately 1000x versus the pure python implementation. The original yahmm package was written by Adam Novak, and he includes amazing documenation at the beginning about how to use it properly. I'll run through it simply:
+
+```
+import pyximport
+pyximport.install( setup_args={'include_dirs':np.get_include()} )
+from yahmm import *
+
+model = Model( "happy model" )
+a = State( NormalDistribution( 3, 4 ), 'a' )
+b = State( NormalDistribution( 10, 1 ), 'b' )
+
+model.add_transition( model.start, a, 0.50 )
+model.add_transition( model.start, b, 0.50 )
+model.add_transition( a, b, 0.50 )
+model.add_transition( b, a, 0.50 )
+model.add_transition( a, model.end, 0.50 )
+model.add_transition( b, model.end, 0.50 )
+model.bake()
+```
+
+In order to use cython modules, you must import them properly using the pyximport package. The next step is to create a Model object, then various State objects, then connect the beginning of the model to the states, the states to each other, and the states to the end of the model in the appropriate manner! Then you can call forward, backward, and viterbi as needed on any sequence of observations. It is important to bake the model in the end, as that solidifies the internals of the HMM.
+
+I usually create a function with the name of the HMM, and have the code to build that HMM inside the function, and return a baked model. 
+
+### Using HMMs
+
+There are three ways to use HMMs on event objects. 
+
+1) The first is to simply use event.apply_hmm( hmm, algorithm ). Algorithm can be forward, backward, or viterbi, depending on what you want. Forward gives the log probability of the event given the model going forward, backward is the same but using the backwards algorithm, and viterbi returns a tuple of the log probability, and most likely path. This defaults to viterbi.
+
+```
+print event.apply_hmm( tRNAbasic(), algorithm='forward' )
+print event.apply_hmm( tRNAbasic(), algorithm='backward' )
+print event.apply_hmm( tRNAbasic() )
+```
+
+1) The second is in the parse class, to create HMM-assisted segmentation. This will concatenate states of the same hidden state which are next to each other, allowing you to add prior information to your segmentation.
+
+```
+event.parse( parser=SpeedyStatSplit( min_gain_per_sample=.2 ), hmm=tRNAbasic() )
+```
+
+2) Lastly, you can pass it in in the plot function. This does not change the underlying event at all, but will simply color it differently when it plots. An example is similar to what we did earlier when comparing different HMM models on an event. Here are two examples of HMM usage for plotting. cmap allows you to define the colormap you use on the serial ID of sequential HMM matching states, and defaults to Set1 due to its wide range of colors.
+
+```
+event.plot( color='hmm', hmm=tRNAbasic(), cmap='Reds' )
+event.plot( color='hmm', hmm=tRNAbasic2(), cmap='Greens' )
+```
 
 # Saving Analyses
 
