@@ -1477,6 +1477,12 @@ cdef class State(object):
         
         return self.distribution is None
         
+    def copy( self ):
+        """
+        Return a hard copy of this state.
+        """
+
+        return State( **self.__dict__ )
             
     def __str__(self):
         """
@@ -2979,7 +2985,3 @@ cdef class Model(object):
                 weights=emission_weights[k] )
         '''
         return log_score
-
-
-
-
