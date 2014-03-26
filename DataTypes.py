@@ -106,15 +106,16 @@ class Event( Segment ):
 
             # Find the viterbi path through the events
             logp, states = self.apply_hmm( hmm )
-            states = states[1:-1]
             
             second = self.file.second
-            i, j, segments = 0, 0, []
-            n = len(states)
+            i, j, n, segments = 0, 0, len(self.segments), []
+
+            print "\t".join( state[1].name for state in states )
             while i < n-1:
-                if states[i] != states[i+1] or i == n-2:
+                print i, j, n, len( self.segments )
+                if states[i][1].name != states[i+1][1].name or i == n-2:
                     ledge = self.segments[j]
-                    redge = ( self.segments[i] if i < n-2 else self.segments[i+1] )
+                    redge = ( self.segments[i] if i < n-2 else self.segments[-1] )
                     segs = self.segments[j:i+1]
 
                     if self.__class__.__name__ == "MetaEvent":
@@ -128,21 +129,19 @@ class Event( Segment ):
                                                       std=std,
                                                       event=self,
                                                       second=self.file.second,
-                                                      hidden_state=states[j].name ) )
+                                                      hidden_state=states[j+1].name ) )
 
                     else:
-                        current = self.current[ ledge.start*second : redge.start*second+redge.n ]
-                        segments.append( Segment( start=ledge.start*second,
+                        s, e = int(ledge.start*second), int(redge.start*second+redge.n)
+                        current = self.current[ s : e ]
+                        segments.append( Segment( start=s,
                                                   current=current,
                                                   event=self,
                                                   second=self.file.second,
-                                                  hidden_state=states[j][1].name ) )
+                                                  hidden_state=states[j+1][1].name ) )
                     j = i
-
                 i += 1
-
             self.segments = segments
-
         self.state_parser = parser
 
     def delete( self ):
@@ -159,15 +158,15 @@ class Event( Segment ):
             segment.delete()
         del self
 
-    def apply_hmm( self, hmm ):
+    def apply_hmm( self, hmm, algorithm='viterbi' ):
         '''
         Apply a hmm to the segments, returning the log probability and the state
         sequence. Only uses the means of the segments currently. 
         '''
 
-        return hmm.viterbi( np.array([ seg.mean for seg in self.segments ]) )
+        return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
 
-    def plot( self, hmm=None, **kwargs ):
+    def plot( self, hmm=None, cmap="Set1", **kwargs ):
         '''
         Plot the segments, colored either according to a color cycle, or according to the colors
         associated with the hidden states of a specific hmm passed in. Accepts all arguments that
@@ -175,19 +174,21 @@ class Event( Segment ):
         '''
 
         if hmm:
+            cm = plt.get_cmap( cmap )
             _, hmm_seq = self.apply_hmm( hmm )
-            hmm_color_cycle = [ state.color if hasattr( state, "color" ) else 'k' 
-                for name, state in hmm_seq if not state.is_silent() ]
+
+            hmm_seq = filter( lambda state: not state[1].is_silent(), hmm_seq )
+            n = float( hmm.name.split('-')[1] )-1
+            hmm_color_cycle = [ cm( (float( state.name[1:])-1 ) / n ) for i, state in hmm_seq ]
 
         if 'color' in kwargs.keys(): # If the user has specified a coloring scheme..
             color_arg = kwargs['color'] # Pull out the coloring scheme
             
             if color_arg == 'cycle': # Use a 4-color rotating cycle on the segments
                 color = [ 'brgc'[i%4] for i in xrange(self.n) ]
-            
-            elif color_arg == 'hmm': # Color using the hidden states of the HMM
-                if hmm:
-                    color = hmm_color_cycle
+
+            elif color_arg == 'hmm': # coloring by HMM hidden state
+                color = hmm_color_cycle
 
             elif color_arg == 'model': # Color by the models in the HMM 
                 color, labels, i, new_model = [], [], 0, False
@@ -207,7 +208,7 @@ class Event( Segment ):
 
             del kwargs['color']
         else:
-            color = 'k'
+            color, color_arg = 'k', 'k'
 
         # Set appropriate labels 
         if 'label' in kwargs.keys():
@@ -253,7 +254,6 @@ class Event( Segment ):
 
         plt.xlabel( "Time (s)" )
         plt.ylabel( "Current (pA)" )
-        plt.grid( color='gray', linestyle=':' )
         plt.ylim( self.min - 5, self.max  )
         plt.xlim( 0, self.duration )
 
@@ -358,15 +358,18 @@ class File( Segment ):
     def __getitem__( self, index ):
         return self.events[ index ]
 
-    def parse( self, parser = lambda_event_parser( threshold=90 ) ):
+    def parse( self, parser = lambda_event_parser( threshold=90 ), delete_current=False ):
         '''
         Applies one of the plug-n-play event parsers for event detection. The parser must have a .parse method
         which returns a tuple corresponding to the 
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
-        self.events = [ Event( current=seg.current, start=seg.start, file=self ) for seg in parser.parse( self.current ) ]
+        self.events = [ Event( current=seg.current, start=seg.start, file=self ) 
+            for seg in parser.parse( self.current ) ]
         self.event_parser = parser
-        del self.current
+        
+        if delete_current:    # Deletes the current array to save significant amounts of space.
+            del self.current  # Events hold a hard copy of a smaller array of current. 
 
     def delete( self ):
         '''
@@ -383,6 +386,34 @@ class File( Segment ):
         for event in self.events:
             event.delete()
         del self
+
+    def plot( self, color_events=True ):
+        '''
+        Allows you to plot a file, optionally coloring the events in a file.
+        '''
+        step = 1./self.second
+        if color_events:
+            events = [(event.start, event.end) for event in self.events]
+
+            current = self.current[ 0:int(events[0][0]*self.second):100 ]
+            plt.plot( np.arange(0, len(current) )*step*100, current, c='k', alpha=0.66 ) 
+
+            for i, (start, end) in enumerate( events ):
+                si, ei = int(start*self.second), int(end*self.second)
+                current = self.current[ si:ei:5 ]
+                plt.plot( np.arange(0, len(current) )*step*5+start, current, c='c', alpha=0.66 )
+
+                si, ei = ei, None if i == len(events)-1 else int( events[i+1][0]*self.second )
+                current = self.current[ si:ei:100 ]
+                plt.plot( np.arange( 0, len(current) )*step*100+end, current, c='k', alpha=0.66 )
+
+        else:
+            plt.plot( np.arange( 0, len(self.current)/self.second ), self.current, c='k', alpha=0.66 )
+
+        plt.title( "File {}".format( self.filename ) )
+        plt.ylabel( "Current (pA)" )
+        plt.xlabel( "Time (s)" )
+        plt.show()
 
     def to_meta( self ):
         '''
@@ -713,7 +744,12 @@ class MultipleEventAlignment( object ):
             raise AttributeError( "alignment_type must be one-vs-all or all-vs-all." )
 
     def _one_vs_all( self, model_id, skip, backslip ):
-        aligner = SegmentAligner( self.events[model_id], skip_penalty=skip, backslip_penalty=backslip )
+        get = lambda attr: lambda event: np.array([getattr( seg, attr ) for seg in event.segments])
+        model = self.events[model_id]
+        aligner = SegmentAligner( get( 'mean' )( model ),
+                                  get( 'std' )( model ),
+                                  get( 'duration' )( model ),
+                                  skip_penalty=skip, backslip_penalty=backslip )
         self.aligned_events = []
         self.model_id = model_id
         for i, event in enumerate( self.events ):
@@ -726,8 +762,12 @@ class MultipleEventAlignment( object ):
         self.score = np.sum( self.pairwise ) / i
 
     def _all_vs_all( self, skip, backslip ):
+        get = lambda attr: lambda event: np.array([getattr( seg, attr ) for seg in event.segments])
         for i, model in enumerate( self.events ):
-            aligner = SegmentAligner( model, skip_penalty=skip, backslip_penalty=backslip )
+            aligner = SegmentAligner( get( 'mean' )( model ),
+                                      get( 'std' )( model ),
+                                      get( 'duration' )( model ),
+                                       skip_penalty=skip, backslip_penalty=backslip )
             for j, event in enumerate( self.events ):
                 if i == j:
                     continue
