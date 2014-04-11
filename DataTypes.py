@@ -179,12 +179,14 @@ class Event( Segment ):
 
             hmm_seq = filter( lambda state: not state[1].is_silent(), hmm_seq )
             n = float( hmm.name.split('-')[1] )-1
-            hmm_color_cycle = [ cm( (float( state.name[1:])-1 ) / n ) for i, state in hmm_seq ]
+            hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'I' if \
+                state.name[0] == 'I' else cm( (float( state.name[1:])-1 ) / n ) \
+                for i, state in hmm_seq ]
 
-        if 'color' in kwargs.keys(): # If the user has specified a coloring scheme..
-            color_arg = kwargs['color'] # Pull out the coloring scheme
+        if 'color' in kwargs.keys(): # If the user has specified a scheme..
+            color_arg = kwargs['color'] # Pull out the coloring scheme..
             
-            if color_arg == 'cycle': # Use a 4-color rotating cycle on the segments
+            if color_arg == 'cycle': # Use a 4-color rotating cycle
                 color = [ 'brgc'[i%4] for i in xrange(self.n) ]
 
             elif color_arg == 'hmm': # coloring by HMM hidden state
