@@ -338,8 +338,8 @@ from libc.math cimport log as clog, sqrt as csqrt, exp as cexp
 import math, random, collections, itertools, sys, bisect, time
 import networkx
 import scipy.stats, scipy.sparse, scipy.special
+import itertools as it
 
-cimport scipy
 import numpy
 cimport numpy
 from matplotlib import pyplot
@@ -1939,8 +1939,8 @@ cdef class Model(object):
 
                 # Issue a notice if verbose is activated
                 if verbose:
-                    print "{} : {} edges did not sum to 1 and were normalized"\
-                        .format( self.name, state.name )
+                    print "{} : {} summed to {}, normalized to 1.0"\
+                        .format( self.name, state.name, out_edges )
 
                 # Reweight the edges so that the probability (not logp) sums
                 # to 1.
@@ -2717,7 +2717,7 @@ cdef class Model(object):
         return model
 
     def train(self, sequences, stop_threshold=1E-9, min_iterations=0,
-         transition_pseudocount=0):
+         transition_pseudocount=0 ):
         """
         Given a list of sequences, perform Baum-Welch iterative re-estimation on
         the model parameters.
@@ -2733,7 +2733,7 @@ cdef class Model(object):
         
         Always trains for at least min_iterations.
         """
-        
+
         sequences = numpy.array( sequences )
         # What's the current log score?
         log_score = self.train_once(sequences,
@@ -2925,115 +2925,49 @@ cdef class Model(object):
         self.transition_log_probabilities = transition_log_probabilities
         return log_score
 
-    cdef double _train_once( self, numpy.ndarray sequences, 
-        double transition_pseudocount ):
+    def viterbi_train( self, sequences ):
         """
-        DO NOT USE. DOES NOT WORK.
+        Performs a simple viterbi training algorithm. Each sequence is tagged
+        using the viterbi algorithm, and both emissions and transitions are
+        updated based on the probabilities in the observations. The weight of
+        the prior model is encapsulated in prior_weight.
         """
 
-        cdef unsigned int D_SIZE = sizeof( double )
-        cdef int n, m = len( self.states ), i=0, k=0, l=0, j=0
-        cdef double log_score = NEGINF, log_sequence_probability
-        cdef double log_transition_emission_probability_sum, p
-        cdef double [:,:] expected_transitions, e
-        cdef list emission_weights = []
-        cdef list emitted_symbols  = []
-        cdef State s
-        cdef Distribution d
+        n = len( self.states )
+        idx = { node: i for node, i in it.izip( self.states, xrange(n) ) }
 
-        for i in xrange( self.silent_start ):
-            emission_weights.append( [] )
+        emissions = {}
+        expected_transitions = numpy.zeros( (n,n) )
 
-        expected_transitions = cvarray( (m,m), itemsize=D_SIZE, format='d' )
+        for sequence in sequences:
+            # Run the viterbi decoding on each observed sequence
+            prob, path = self.viterbi( sequence )
+            e_path = it.ifilter( lambda state: not state[1].is_silent(), path )
 
-        for i in xrange( len(sequences) ):
-            n = len( sequences[i] )
+            # Go through the path of character-generation states
+            for (i, state), obs in it.izip( e_path, sequence ):
+                # Add to a list of emissions from that state
+                try:
+                    emissions[ state ].append( obs )
+                except:
+                    emissions[ state ] = [ obs ]
 
-            e = cvarray( shape=(n,self.silent_start), itemsize=D_SIZE, format='d' )
-            for k in xrange( n ):
-                for l in xrange( self.silent_start ):
-                    s = <State>self.states[l]
-                    d = <Distribution>(s.distribution)
-                    e[k, l] = d.log_probability( sequences[i][k] )
+            # Go through sequential pairs to add each edge to a matrix of counts
+            for hs, next_hs in it.izip( path[:-1], path[1:] ):
+                expected_transitions[ idx[ hs[1] ] ][ idx[ next_hs[1] ] ] += 1
 
-            log_sequence_probability = self.forward( sequences[i] )
+        # Recalculate the emission distributions solely from new observations
+        for state, emissions in emissions.iteritems():
+            state.distribution.from_sample( emissions )
 
-            if log_sequence_probability == NEGINF:
-                print "Warning: skipped impossible sequence {}".format( 
-                    sequences[i] )
-                continue
-            
-            log_score = log_sum_exp( numpy.array([ log_score, 
-                log_sequence_probability ]) )
+        # Normalize the matrix of counts to log probabilities
+        row_norms = expected_transitions.sum( axis=1 )
 
-            self.backward( sequences[i] )
+        expected_transitions[row_norms != 0, :] = (
+            log(expected_transitions[row_norms != 0, :])  -
+            log(row_norms[row_norms != 0][:, numpy.newaxis]))
 
-            for k in xrange( n ):
-                emitted_symbols.append( sequences[i][k] )
+        expected_transitions[row_norms == 0, :] = NEGINF
 
-            for k in xrange( m ):
-                for l in xrange( self.silent_start ):
-                    log_transition_emission_probability_sum = NEGINF
-
-                    for j in xrange( n ):
-                        log_transition_emission_probability_sum = log_sum_exp(
-                            numpy.array([ log_transition_emission_probability_sum,
-                                self.f[j, k] +
-                                self.transition_log_probabilities[k, l] +
-                                e[j, l] + self.b[j+1, l] ]) )
-
-                    expected_transitions[k, l] += exp(
-                        log_transition_emission_probability_sum - 
-                        log_sequence_probability )
-
-                for l in xrange( self.silent_start, m ):
-                    log_transition_emission_probability_sum = NEGINF
-
-                    for j in xrange( n+1 ):
-                        log_transition_emission_probability_sum = log_sum_exp(
-                            numpy.array([ log_transition_emission_probability_sum,
-                                self.f[j, k] +
-                                self.transition_log_probabilities[k, l] +
-                                self.b[j, l] ]))
-
-                    expected_transitions[k, l] += exp(
-                        log_transition_emission_probability_sum -
-                        log_sequence_probability )
-
-                if k < self.silent_start:
-                    for j in xrange( n ):
-                        weight = exp( self.f[j+1, k] + self.b[j+1, k] -
-                            log_sequence_probability )
-
-                        emission_weights[k].append( weight )
-
-
-        row_norms = numpy.array( expected_transitions ).sum(axis=1)
-
-        # THERE IS SOMETHING WRONG HERE. I DON'T KNOW WHAT IT IS. PLEASE DO NOT USE.
-        # Only modifies transitions for states a transition was observed from.
-        # Work in log space
-        cdef numpy.ndarray tlp = numpy.array( self.transition_log_probabilities )
-        cdef numpy.ndarray et = numpy.array( expected_transitions )
-
-        tlp[row_norms != 0, :] = ( log(et[row_norms != 0, :]) - log(row_norms[row_norms != 0][:, numpy.newaxis] ) )
-
-        #self.transition_log_probabilities = tlp
-        '''
-        cdef double row_norm
-        for i in xrange( m ):
-            row_norm = sum( expected_transitions[i] )
-            if row_norm != 0:
-                for j in xrange( len(expected_transitions[i]) ):
-                    self.transition_log_probabilities[j, i] = _log( 
-                        expected_transitions[j, i] ) - _log( row_norm )
-
-        for k in xrange( self.silent_start ):
-            self.states[k].distribution.from_sample( emitted_symbols,
-                weights=emission_weights[k] )
-        '''
-        return log_score
-
-
-
-
+        # Save the matrix as the new transition matrix
+        self.transition_log_probabilities = expected_transitions
