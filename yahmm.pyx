@@ -334,10 +334,12 @@ BernoulliDistribution 0.4
 
 cimport cython
 from cython.view cimport array as cvarray
-from libc.math cimport log as clog, sqrt as csqrt
+from libc.math cimport log as clog, sqrt as csqrt, exp as cexp
 import math, random, collections, itertools, sys, bisect, time
 import networkx
 import scipy.stats, scipy.sparse, scipy.special
+
+cimport scipy
 import numpy
 cimport numpy
 from matplotlib import pyplot
@@ -352,18 +354,6 @@ cdef inline double _log ( double value ):
     Cython wrapper for C log function.
     '''
     return clog( value ) if value > 0 else NEGINF
-
-cdef inline double [:] _log_array( double[:] values ):
-    '''
-    Apply the log function to an entire array.
-    '''
-    cdef int i = 0, n = len( values )
-    cdef double[:] to_return = cvarray( (n,1), itemsize=sizeof(double), format='d' )
-
-    for i in xrange( n ):
-        to_return[i] = _log( values[i] )
-
-    return to_return
 
 cdef inline double max( double [:] values ):
     '''
@@ -421,7 +411,23 @@ cdef inline double [:] vector_add( double[:] values, offset ):
 
     return values
 
+cdef inline double pair_lse( double x, double y ):
+    if x == INF or y == INF:
+        return INF
+    return clog( cexp(x)+cexp(y) )
+
 cdef inline double log_sum_exp( double[:] values ):
+    """
+    Take exp of all the values, sum them, and then take the log. However, do it 
+    in a way that avoids numerical underflow and overflow via the log-sum-exp 
+    trick.
+    
+    Values can be any sequence, but gets forced into a Numpy array.
+    
+    Was a straight port of http://jblevins.org/log/log-sum-exp until I started 
+    tacking on special-case code.
+    """
+
     cdef int i = 0, j = 0, n = len( values ), finite = 0
     cdef double to_return, log_factor
 
@@ -436,7 +442,7 @@ cdef inline double log_sum_exp( double[:] values ):
 
     cdef double [:] finite_values = cvarray( (finite,), itemsize=sizeof(double), format='d' )
 
-    for i in xrange( finite ):
+    for i in xrange( n ):
         if values[i] != NEGINF:
             finite_values[j] = values[i]
             j = j + 1
@@ -464,14 +470,12 @@ def log(value):
     Return the natural log of the given value, or - infinity if the value is 0.
     Can handle both scalar floats and numpy arrays.
     """
+
     if isinstance( value, numpy.ndarray ):
-        if len( value.shape ) > 1:
-            to_return = numpy.zeros(( value.shape ))
-            to_return[ value > 0 ] = numpy.log( value[ value > 0 ] )
-            to_return[ value == 0 ] = NEGINF
-            return to_return
-        else:
-            return _log_array( value )
+        to_return = numpy.zeros(( value.shape ))
+        to_return[ value > 0 ] = numpy.log( value[ value > 0 ] )
+        to_return[ value == 0 ] = NEGINF
+        return to_return
     return _log( value )
         
 def exp(value):
@@ -480,78 +484,6 @@ def exp(value):
     """
     
     return numpy.exp(value)
-
-def plog_sum_exp(values):
-    """
-    Take exp of all the values, sum them, and then take the log. However, do it 
-    in a way that avoids numerical underflow and overflow via the log-sum-exp 
-    trick.
-    
-    Values can be any sequence, but gets forced into a Numpy array.
-    
-    Was a straight port of http://jblevins.org/log/log-sum-exp until I started 
-    tacking on special-case code.
-    """
-    if len(values) == 0:
-        # No values
-        # Return the log of the additive identity
-        return float("-inf")
-    
-    # Make it be an array
-    values = numpy.asarray(values)
-
-    # What value should we pull out?
-    # First, what values are finite?
-    # Not the +inf ones!
-    finite_values = values[values != float("inf")]
-    if len(finite_values) != len(values):
-        # We had a +inf in there. That's log(+inf).
-        # So we can cheat and return +inf
-        return float("+inf")
-        
-    # We don't care about any -infs
-    finite_values = finite_values[finite_values != float("-inf")]
-
-    if len(finite_values) == 0:
-        # All our values are infinities. Return one arbitrarily.
-        return values[0]
-    
-    # Find the smallest and biggest finite values
-    biggest = numpy.max(finite_values)
-    smallest = numpy.min(finite_values)
-
-    # Which ever has greater magnitude is the log of the factor we factor out.
-    if abs(smallest) > biggest:
-        log_factor = smallest
-    else:
-        log_factor = biggest
-    
-    
-    # Enable errors on dubious math, so we don't get nans
-    old_settings = numpy.seterr(all="raise")
-    
-    try:
-        # Divide everything by factor, sum, and then multiply by factor. Save  
-        # the value.   
-        to_return = log(numpy.sum(exp(values - log_factor))) + log_factor
-    except FloatingPointError:
-        # This can fail if we try to add an absurdly tiny number to an absurdly
-        # tinier number. If one is e^-800 and the other e^-3000, we try to add 
-        # e^0 and e^+2200 when we do the trick, and e^+2200 is far too big to 
-        # exist.
-        # The solution: throw away the min value (since it's too small to 
-        # matter) and recurse.
-        # Yes, we recurse on exception.
-
-        # What's left?
-        remaining = numpy.delete(finite_values, numpy.argmin(finite_values))
-        to_return = log_sum_exp(remaining)
-
-    # Put back Numpy error settings
-    numpy.seterr(**old_settings)
-
-    # Return it
-    return to_return
 
 cdef class Distribution(object):
     """
@@ -577,6 +509,13 @@ cdef class Distribution(object):
     property name:
         def __get__( self ):
             return "Distribution"
+
+    property parameters:
+        def __get__( self ):
+            try:
+                return self.parameters
+            except:
+                return self.points
 
     def __init__(self):
         """
@@ -778,25 +717,29 @@ cdef class NormalDistribution(Distribution):
         # Store the parameters
         self.parameters = [mean, std]
 
-    def log_probability(self, symbol, epsilon=1E-9):
+    def log_probability(self, symbol, epsilon=1E-4):
         """
         What's the probability of the given float under this distribution?
         
         For distributions with 0 std, epsilon is the distance within which to 
         consider things equal to the mean.
         """
-        
+
         return self._log_probability( symbol, epsilon )
 
-    cdef double _log_probability( self, double symbol, double epsilon=1E-9 ):
-        
+    cdef double _log_probability( self, double symbol, double epsilon ):
+        """
+        Do the actual math here.
+        """
+
         cdef double mu = self.parameters[0], theta = self.parameters[1]
-        if theta == 0:
+        if theta == 0.0:
             if abs( symbol - mu ) < epsilon:
                 return 0
             else:
                 return NEGINF
-        return ( _log(1.0 / ( theta * SQRT_2_PI ) ) - ((symbol - mu) ** 2) / (2 * theta ** 2))        
+  
+        return _log( 1.0 / ( theta * SQRT_2_PI ) ) - ((symbol - mu) ** 2) / (2 * theta ** 2)       
             
             
     def sample(self):
@@ -1269,7 +1212,6 @@ cdef class GaussianKernelDensity( Distribution ):
             return "GaussianKernelDensity"
 
     def __init__( self, points, bandwidth=1 ):
-
         # Take in the points which are in one dimension
         self.points = numpy.array( points )
         self.parameters = [ points, bandwidth ]
@@ -1294,11 +1236,19 @@ cdef class GaussianKernelDensity( Distribution ):
 
         for i in xrange( n ):
             mu = self.points[i]
-            log_p = ( _log(1.0 / ( bandwidth * SQRT_2_PI ) ) - ((symbol - mu) ** 2) / (2 * bandwidth ** 2))
-            s = s + log_p
+            s = s + ( 1.0 / SQRT_2_PI * cexp( -0.5 * ((mu-symbol)/bandwidth) ** 2 ) ) / n
 
-        return s
+        return _log(s)
 
+    def sample( self ):
+        """
+        Return a random sample from the kernel density.
+        """
+
+        mu = random.choice( self.points )
+        return random.gauss( mu, self.parameters[1] )
+
+    @classmethod
     def from_sample( cls, items ):
         """
         Replace the points.
@@ -1323,7 +1273,6 @@ cdef class UniformKernelDensity( Distribution ):
             return "UniformKernelDensity"
 
     def __init__( self, points, bandwidth=1 ):
-
         # Takes in the points which are in one dimension
         self.points = numpy.array( points )
         self.parameters = [ points, bandwidth ]
@@ -1348,10 +1297,16 @@ cdef class UniformKernelDensity( Distribution ):
         for i in xrange( n ):
             mu = self.points[i]
             if abs( mu - symbol ) <= self.parameters[1]:
-                s = s + 1
+                s = s + 1. / n
 
-        return s
+        return _log(s)
     
+    def sample( self ):
+        mu = random.choice( self.points )
+        bandwidth = self.parameters[1]
+        return random.uniform( mu-bandwidth, mu+bandwidth )
+
+    @classmethod
     def from_sample( cls, items ):
         """
         Replace the points.
@@ -1376,14 +1331,13 @@ cdef class TriangleKernelDensity( Distribution ):
             return "TriangleKernelDensity"
 
     def __init__( self, points, bandwidth=1 ):
-
         # Takes in the points which are in one dimension
         self.points = numpy.array( points )
         self.parameters = [ points, bandwidth ]
 
     def log_probability( self, symbol ):
         """
-        What's the probability ofa given float under this distribution? It's
+        What's the probability of a given float under this distribution? It's
         the sum of the distances from the symbol calculated under individual
         exponential distributions. A wrapper for the cython function.
         """ 
@@ -1402,10 +1356,16 @@ cdef class TriangleKernelDensity( Distribution ):
             mu = self.points[i]
             distance = abs( mu - symbol )
             if distance <= bandwidth:
-                s = s + ( bandwidth - distance )
+                s = s + ( bandwidth - distance ) / n
 
-        return s
+        return _log(s)
 
+    def sample( self ):
+        mu = random.choice( self.points )
+        bandwidth = self.parameters[1]
+        return random.triangular( mu-bandwidth, mu+bandwidth, mu )
+
+    @classmethod
     def from_sample( cls, items ):
         """
         Replace the points.
@@ -1415,6 +1375,47 @@ cdef class TriangleKernelDensity( Distribution ):
 
 # Register the TriangleKernelDensity
 TriangleKernelDensity.register()
+
+cdef class MixtureDistribution( Distribution ):
+    """
+    Allows you to create an arbitrary mixture of distributions. There can be
+    any number of distributions, include any permutation of types of
+    distributions. Can also specify weights for the distributions.
+    """
+
+    cdef list distributions
+
+    property name:
+        def __get__( self ):
+            return "MixtureDistribution"
+
+    def __init__( self, distributions, weights=None ):
+        n = len(distributions)
+        weights = weights or [ 1./n for i in xrange(n) ]
+        self.parameters = [ distributions, weights ]
+
+    def log_probability( self, symbol ):
+        """
+        What's the probability of a given float under this mixture? It's
+        the sum of the distances from the symbol calculated under all
+        distributions.
+        """
+
+        (d, w), n = self.parameters, len( self.parameters) 
+        return log( sum( exp( d[i](symbol) ) * w[i] for i in xrange(n) ) )
+
+    def sample( self ):
+        """
+        Sample from the mixture. First, choose a distribution to sample from
+        according to the weights, then sample from that distribution. 
+        """
+
+        i = random.random()
+        for d, w in zip( self.parameters ):
+            if w > i:
+                return d.sample()
+            i -= w 
+
 
 cdef class State(object):
     """
@@ -1887,7 +1888,7 @@ cdef class Model(object):
         networkx.draw(self.graph)
         pyplot.show()
            
-    def bake(self): 
+    def bake(self, verbose=False): 
         """
         Finalize the topology of the model, and assign a numerical index to
         every state. This method must be called before any of the probability-
@@ -1899,6 +1900,53 @@ cdef class Model(object):
         (the index of the first silent state).
         """
         
+        # Automatically merge adjacent silent states attached by a single edge
+        # of 1.0 probability, as that adds nothing to the model. Traverse the
+        # edges looking for 1.0 probability edges between silent states.
+        for a, b, e in self.graph.edges( data=True ):
+            # Since we may have removed a or b in a previous iteration,
+            # a simple fix is to just check to see if it's still there
+            if a not in self.graph.nodes() or b not in self.graph.nodes():
+                continue
+
+            # If log probability is 0 and both states are silent, look into it
+            if e['weight'] == 0.0 and a.is_silent() and b.is_silent():
+
+                # Issue a notice if verbose is activated
+                if verbose:
+                    print "{} : {} - {} merged".format( self.name, a, b )
+
+                # Remove the edge first
+                self.graph.remove_edge(a,b)
+
+                # Add all the edges in b to a
+                for state, edge in self.graph.edge[b].items():
+                    self.graph.add_edge( a, state, weight=edge['weight'] )
+
+                # Remove b entirely
+                self.graph.remove_node(b)
+
+        # Go through the model checking to make sure out edges sum to 1.
+        # Normalize them to 1 if this is not the case.
+        for state in self.graph.nodes():
+
+            # Perform log sum exp on the edges to see if they properly sum to 1
+            out_edges = numpy.sum( map( lambda x: numpy.e**x['weight'], 
+                self.graph.edge[state].values() ) )
+
+            # The end state has no out edges, so will be 0
+            if out_edges < 1 and state != self.end:
+
+                # Issue a notice if verbose is activated
+                if verbose:
+                    print "{} : {} edges did not sum to 1 and were normalized"\
+                        .format( self.name, state.name )
+
+                # Reweight the edges so that the probability (not logp) sums
+                # to 1.
+                for edge in self.graph.edge[state].values():
+                    edge['weight'] = log( numpy.e**edge['weight'] / out_edges )
+
         # Get a list of all states
         states = self.graph.nodes()
         
@@ -2019,7 +2067,7 @@ cdef class Model(object):
         """
 
         cdef unsigned int D_SIZE = sizeof( double )
-        cdef int i = 0, k, l, n = len( sequence ), m = len( self.states )
+        cdef int i = 0, k, l, n = len( sequence ), m = len( self.states ), j = 0
         cdef double [:,:] f, e
         cdef double log_probability
         cdef State s
@@ -2060,8 +2108,8 @@ cdef class Model(object):
             log_probability = NEGINF
             for k in xrange( self.silent_start, l):
                 # For each current-step preceeding silent state k
-                log_probability = log_sum_exp( numpy.array([ log_probability,
-                    f[0, k] + self.transition_log_probabilities[k, l]]))
+                log_probability = pair_lse( log_probability, 
+                    f[0, k] + self.transition_log_probabilities[k, l] )
 
             # Update the table entry
             f[0, l] = log_probability
@@ -2075,8 +2123,8 @@ cdef class Model(object):
                 log_probability = NEGINF
                 for k in xrange( m ):
                     # For each previous state k
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        f[i, k] + self.transition_log_probabilities[k, l]]))
+                    log_probability = pair_lse( log_probability,
+                        f[i, k] + self.transition_log_probabilities[k, l] )
 
                 # Now set the table entry for log probability of emitting 
                 # index+1 characters and ending in state l
@@ -2089,8 +2137,8 @@ cdef class Model(object):
                 log_probability = NEGINF
                 for k in xrange( self.silent_start ):
                     # For each current-step non-silent state k
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        f[i+1, k] + self.transition_log_probabilities[k, l]]))
+                    log_probability = pair_lse( log_probability,
+                        f[i+1, k] + self.transition_log_probabilities[k, l] )
 
                 # Set the table entry to the partial result.
                 f[i+1, l] = log_probability
@@ -2105,8 +2153,8 @@ cdef class Model(object):
                 log_probability = NEGINF
                 for k in xrange( self.silent_start, l ):
                     # For each current-step preceeding silent state k
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        f[i+1, k] + self.transition_log_probabilities[k, l]]))
+                    log_probability = pair_lse( log_probability,
+                        f[i+1, k] + self.transition_log_probabilities[k, l] )
 
                 # Add the previous partial result and update the table entry
                 f[i+1, l] = log_sum_exp( numpy.array([ f[i+1, l],
@@ -2195,8 +2243,8 @@ cdef class Model(object):
             for l in xrange( k+1, m ):
                 # For each possible current-step silent state we can go to,
                 # take into account just transition probability
-                log_probability = log_sum_exp( numpy.array([ log_probability,
-                    b[n,l] + self.transition_log_probabilities[k, l]] ))
+                log_probability = pair_lse( log_probability,
+                    b[n,l] + self.transition_log_probabilities[k, l] )
 
             # Now this is the probability of reaching the end state given we are
             # in this silent state.
@@ -2213,8 +2261,8 @@ cdef class Model(object):
                 # For each current-step silent state, add in the probability
                 # of going from here to there and then continuing on to the
                 # end of the sequence.
-                log_probability = log_sum_exp( numpy.array([ log_probability,
-                    b[n, l] + self.transition_log_probabilities[k, l]] ))
+                log_probability = pair_lse( log_probability,
+                    b[n, l] + self.transition_log_probabilities[k, l] )
 
             # Now we have summed the probabilities of all the ways we can
             # get from here to the end, so we can fill in the table entry.
@@ -2242,9 +2290,9 @@ cdef class Model(object):
                 for l in xrange( self.silent_start ):
                     # For each subsequent non-silent state l, take into account
                     # transition and emission emission probability.
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
+                    log_probability = pair_lse( log_probability,
                         b[i+1, l] + self.transition_log_probabilities[k, l] +
-                        e[i, l]]))
+                        e[i, l] ) 
 
                 # We can't go from a silent state here to a silent state on the
                 # next symbol, so we're done finding the probability assuming we
@@ -2265,8 +2313,8 @@ cdef class Model(object):
                 for l in xrange( k+1, m ):
                     # For each possible current-step silent state we can go to,
                     # take into account just transition probability
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        b[i, l] + self.transition_log_probabilities[k, l] ]))
+                    log_probability = pair_lse( log_probability,
+                        b[i, l] + self.transition_log_probabilities[k, l] )
 
                 # Now add this probability in with the probability accumulated
                 # from transitions to subsequent non-silent states.
@@ -2282,16 +2330,16 @@ cdef class Model(object):
                 for l in xrange( self.silent_start ):
                     # For each subsequent non-silent state l, take into account
                     # transition and emission emission probability.
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        b[i+1, l] + self.transition_log_probabilities[k,l] +
-                        e[i, l]] ))
+                    log_probability = pair_lse( log_probability,
+                        b[i+1, l] + self.transition_log_probabilities[k, l] +
+                        e[i, l] )
 
                 for l in xrange( self.silent_start, m ):
                     # For each current-step silent state, add in the probability
                     # of going from here to there and then continuing on to the
                     # end of the sequence.
-                    log_probability = log_sum_exp( numpy.array([ log_probability,
-                        b[i, l] + self.transition_log_probabilities[k, l] ]))
+                    log_probability = pair_lse( log_probability,
+                        b[i, l] + self.transition_log_probabilities[k, l] )
 
                 # Now we have summed the probabilities of all the ways we can
                 # get from here to the end, so we can fill in the table entry.
@@ -2985,3 +3033,7 @@ cdef class Model(object):
                 weights=emission_weights[k] )
         '''
         return log_score
+
+
+
+
