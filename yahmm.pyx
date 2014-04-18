@@ -12,7 +12,7 @@ up from smaller models, loaded from files, baked (into a form that can be used
 to calculate probabilities efficiently), trained on data, and saved.
 
 Implements the forwards, backwards, and Viterbi algorithms, and training by the 
-Baum-Welch Algorithm.
+Baum-Welch Algorithm and Viterbi algorithms, both without inertia.
 
 Silent states are accounted for, but loops containing all silent states are
 prohibited.
@@ -194,6 +194,23 @@ GammaDistribution(shape, rate)
 even though the parameters have the same names.
 
 InverseGammaDistribution(shape, rate)
+
+GaussianKernelDensity( points, bandwidth )
+
+UniformKernelDensity( points, bandwidth )
+
+TriangleKernelDensity( points, bandwidth )
+
+MixtureDistribution( distributions, weights=None )
+
+The module also provides two other distributions 
+
+DiscreteDistribution( characters )
+( Allows you to pass in a dictionary of key: probability pairs )
+
+LambdaDistribution( lambda_funct )
+( Allows you to pass in an arbitrary function that returns a log probability for
+a given symbol )
 
 To add a new Distribution, with full serialization and deserialization support, 
 you have to make a new class that inherits from Distribution. That class must 
