@@ -2811,7 +2811,7 @@ cdef class Model(object):
 		while improvement > stop_threshold or iteration < min_iterations:
 			
 			# train again and get the new score
-			new_log_score = self._train_once(sequences, 
+			new_log_score = self.train_once(sequences, 
 				transition_pseudocount=transition_pseudocount)
 			
 			iteration += 1
@@ -2852,7 +2852,7 @@ cdef class Model(object):
 		# weights for each state for each of those symbols.
 		# This is the concatenated list of emitted symbols
 		emitted_symbols = []
-		
+
 		# This is a list lists of symbol weights, by state number, for 
 		# non-silent states
 		emission_weights = [[] for i in xrange(self.silent_start)]
@@ -2861,6 +2861,12 @@ cdef class Model(object):
 		log_score = float("-inf")
 		
 		for sequence in sequences:
+			# Calculate the emission table
+			e = numpy.zeros(( len( sequence ), self.silent_start )) 
+			for k in xrange( len( sequence ) ):
+				for i in xrange( self.silent_start ):
+					e[k, i] = self.states[i].distribution.log_probability( sequence[k] )
+
 			# Get the overall log probability of the sequence, and fill in self.f
 			log_sequence_probability = self.forward(sequence)
 			
@@ -2870,9 +2876,9 @@ cdef class Model(object):
 				print "Warning: skipped impossible sequence {}".format(sequence)
 				continue
 			
-			
 			# Add to the score
-			log_score = log_sum_exp( numpy.array([log_score, log_sequence_probability]))
+			#log_score = log_sum_exp( numpy.array([log_score, log_sequence_probability]))
+			log_score = pair_lse( log_score, log_sequence_probability )
 			
 			# Fill in self.b too
 			self.backward(sequence)
@@ -2894,12 +2900,12 @@ cdef class Model(object):
 						# Add probability that we start and get up to state k, 
 						# and go k->l, and emit the symbol from l, and go from l
 						# to the end.
-						log_transition_emission_probability_sum = log_sum_exp(
-							numpy.array([ log_transition_emission_probability_sum,
+						log_transition_emission_probability_sum = pair_lse( 
+							log_transition_emission_probability_sum, 
 							self.f[index, k] + 
 							transition_log_probabilities[k, l] + 
-							self.states[l].distribution.log_probability(
-							symbol) + self.b[index + 1, l] ]))
+							e[index, l] + self.b[ index+1, l ] )
+
 					
 					# Now divide by probability of the sequence to make it given
 					# this sequence, and add as this sequence's contribution to 
@@ -2923,12 +2929,10 @@ cdef class Model(object):
 						# and go k->l, and go from l to the end. In this case, 
 						# we use forward and backward entries from the same DP 
 						# table row, since no character is being emitted.
-						log_transition_emission_probability_sum = log_sum_exp(
-							numpy.array([
-							log_transition_emission_probability_sum,
-							self.f[index, k] + 
-							transition_log_probabilities[k, l] + 
-							+ self.b[index, l] ]))
+						log_transition_emission_probability_sum = pair_lse( 
+							log_transition_emission_probability_sum, 
+							self.f[index, k] + transition_log_probabilities[k, l] 
+							+ self.b[index, l] )
 					
 					# Now divide by probability of the sequence to make it given
 					# this sequence, and add as this sequence's contribution to 
