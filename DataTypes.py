@@ -178,10 +178,21 @@ class Event( Segment ):
             _, hmm_seq = self.apply_hmm( hmm )
 
             hmm_seq = filter( lambda state: not state[1].is_silent(), hmm_seq )
-            n = float( hmm.name.split('-')[1] )-1
-            hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'I' if \
-                state.name[0] == 'I' else cm( (float( state.name[1:])-1 ) / n ) \
-                for i, state in hmm_seq ]
+            
+            try:
+                # If using the naming scheme of "X..." meaning a single character
+                # to indicate state type, then an integer, then parse using that.
+                # Ex: U1, U15, I17, M201, M2...
+                n = float( hmm.name.split('-')[1] )-1
+                hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'I' if \
+                    state.name[0] == 'I' else cm( (float( state.name[1:])-1 ) / n ) \
+                    for i, state in hmm_seq ]
+            except:
+                # If using any other naming scheme, assign a color from the colormap
+                # to each state without any ordering, since none was specified.
+                states = { hmm.states[i]: i for i in xrange( len(hmm.states) ) }
+                hmm_color_cycle = [ cm( states[state] ) for i, state in hmm_seq ]
+                print hmm_color_cycle
 
         if 'color' in kwargs.keys(): # If the user has specified a scheme..
             color_arg = kwargs['color'] # Pull out the coloring scheme..
