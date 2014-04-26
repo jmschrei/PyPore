@@ -110,9 +110,7 @@ class Event( Segment ):
             second = self.file.second
             i, j, n, segments = 0, 0, len(self.segments), []
 
-            print "\t".join( state[1].name for state in states )
             while i < n-1:
-                print i, j, n, len( self.segments )
                 if states[i][1].name != states[i+1][1].name or i == n-2:
                     ledge = self.segments[j]
                     redge = ( self.segments[i] if i < n-2 else self.segments[-1] )
@@ -184,7 +182,7 @@ class Event( Segment ):
                 # to indicate state type, then an integer, then parse using that.
                 # Ex: U1, U15, I17, M201, M2...
                 n = float( hmm.name.split('-')[1] )-1
-                hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'I' if \
+                hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'k' if \
                     state.name[0] == 'I' else cm( (float( state.name[1:])-1 ) / n ) \
                     for i, state in hmm_seq ]
             except:
@@ -261,9 +259,9 @@ class Event( Segment ):
         if len(labels) > 0:
             plt.legend()
         try:
-            plt.title( "Event at {filename} at {time}s".format( filename=self.file.filename, time=self.start ) )
+            plt.title( "Event at {} at {}s".format( self.file.filename, self.start ) )
         except:
-            plt.title( "Event at {time}s".format( time=self.start ))
+            plt.title( "Event at {}s".format( self.start ))
 
         plt.xlabel( "Time (s)" )
         plt.ylabel( "Current (pA)" )
@@ -400,32 +398,49 @@ class File( Segment ):
             event.delete()
         del self
 
-    def plot( self, color_events=True ):
+    def plot( self, color_events=True, limits=None, event_downsample=5, file_downsample=100,
+        file_kwargs={ 'c':'k', 'alpha':0.66 }, event_kwargs={ 'c': 'c', 'alpha':0.66 }, **kwargs ):
         '''
         Allows you to plot a file, optionally coloring the events in a file.
         '''
         step = 1./self.second
-        if color_events:
-            events = [(event.start, event.end) for event in self.events]
 
-            current = self.current[ 0:int(events[0][0]*self.second):100 ]
-            plt.plot( np.arange(0, len(current) )*step*100, current, c='k', alpha=0.66 ) 
+        # Allows you to only plot a certain portion of the file
+        limits = limits or ( 0, len( self.current) )
+
+        # Color the events if you want 
+        if color_events:
+            events = [ (event.start, event.end) for event in self.events \
+                if event.start*self.second > limits[0] and event.end*self.second < limits[1] ]
+
+            if len(events) == 0:
+                plt.plot( np.arange( limits[0], limits[1] ), 
+                    self.current[ limits[0]:limits[1] ], **kwargs )
+            else:
+                current = self.current[ limits[0]:int(events[0][0]*self.second):\
+                    file_downsample ]
+                plt.plot( np.arange(0, len(current) )*step*file_downsample+limits[0]*step, 
+                    current, **file_kwargs ) 
 
             for i, (start, end) in enumerate( events ):
+                print "derp"
                 si, ei = int(start*self.second), int(end*self.second)
-                current = self.current[ si:ei:5 ]
-                plt.plot( np.arange(0, len(current) )*step*5+start, current, c='c', alpha=0.66 )
+                current = self.current[ si:ei:event_downsample ]
+                plt.plot( np.arange(0, len(current) )*step*event_downsample+start, 
+                    current, **event_kwargs )
 
-                si, ei = ei, None if i == len(events)-1 else int( events[i+1][0]*self.second )
-                current = self.current[ si:ei:100 ]
-                plt.plot( np.arange( 0, len(current) )*step*100+end, current, c='k', alpha=0.66 )
+                si, ei = ei, limits[1] if i == len(events)-1 else int( events[i+1][0]*self.second )
+                current = self.current[ si:ei:file_downsample ]
+                plt.plot( np.arange( 0, len(current) )*step*file_downsample+end, 
+                    current, **file_kwargs )
 
         else:
-            plt.plot( np.arange( 0, len(self.current)/self.second ), self.current, c='k', alpha=0.66 )
+            plt.plot( np.arange( 0, len(self.current)/self.second ), self.current, **kwargs )
 
         plt.title( "File {}".format( self.filename ) )
         plt.ylabel( "Current (pA)" )
         plt.xlabel( "Time (s)" )
+        plt.xlim( limits[0]*step, limits[1]*step )
         plt.show()
 
     def to_meta( self ):
