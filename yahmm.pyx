@@ -1,7 +1,7 @@
 #!/usr/bin/env python2.7
 # yahmm.py: Yet Another Hidden Markov Model library
-# Originally written by Adam Novak; modifications and incorporation into PyPore
-# by Jacob Schreiber
+# Contact: Jacob Schreiber ( jmschreiber91@gmail.com )
+#          Adam Novak ( anovak1@ucsc.edu )
 
 """
 Yet Another Hidden Markov Model library
@@ -11,8 +11,25 @@ based interface. Models can be constructed node by node and edge by edge, built
 up from smaller models, loaded from files, baked (into a form that can be used
 to calculate probabilities efficiently), trained on data, and saved.
 
-Implements the forwards, backwards, and Viterbi algorithms, and training by the 
-Baum-Welch Algorithm and Viterbi algorithms, both without inertia.
+Given those scripts status as a .pyx file, the easiest way to import it
+directly is to write the following at the top of any script:
+
+>>> import pyximport
+>>> import numpy as np
+>>> pyximport.install( setup_args={'include_dirs':np.get_include()})
+>>> from yahmm import * 
+
+This may produce an error that vcvarsall.bat cannot be found. This can usually be
+fixed by ensuring that your \Lib\distutils\distutils.cfg file looks like the
+following:
+
+[build]
+compiler=mingw32
+[build_ext]
+compiler=mingw32
+
+Implements the forwards, backwards, forward-backward, and Viterbi algorithms, 
+and training by both Baum-Welch and Viterbi algorithms.
 
 Silent states are accounted for, but loops containing all silent states are
 prohibited.
@@ -57,10 +74,9 @@ We then add states to the HMM with the Model.add_state method:
 >>> model.add_state(state)
 >>> model.add_state(state2)
 
-You can then add transitions between states, with associated probabilities. The 
-Model does not normalize probabilities; you are responsible for ensuring that 
-there is a total probability of 1 for all transitions out of each state but 
-HMM.end.
+You can then add transitions between states, with associated probabilities.
+Out-edge probabilities are normalized to 1. for every state when the model is
+baked, not before. 
 
 >>> model.add_transition(state, state, 0.4)
 >>> model.add_transition(state, state2, 0.4)
@@ -81,11 +97,19 @@ model object.
 
 If you want to compose two Models together, use the Model.add_model() method. 
 Note that you should not try to use the added model separately once you do this.
+You can also make use of the Model.concatenate_model() method, which will assume
+you simply want to connect model_a.end to model_b.start with a 1. probability
+edge. 
 
 Once we've finished building our model, we have to bake it. Internally, baking 
 the model generates the transition log probability matrix, and imposes a 
 numerical ordering on the states. If you add more states to the model, you will 
-have to bake it again.
+have to bake it again. Baking is also where edge normalization occurs to ensure
+that the out-edges for all nodes (except Model.end) sum to 1. Lastly, a
+simplification of the graph occurs here, merging any silent states which are
+connected simply by a 1.0 probability edge, as they cannot add value to the
+graph. You may toggle 'verbose=True' in the bake method to get a log of
+when either change occurs to your graph.
 
 >>> model.bake()
 
@@ -109,13 +133,57 @@ And another:
 We can calculate the log probability of the sequence given the model (the log 
 likelihood), summing over all possible paths, using both the forward and 
 backward algorithms. Log probability is reported in nats (i.e. it is natural 
-log probability).
+log probability). Both algorithms return the full table of size
+len( observations ) x len( states ). For the forward algorithm, the entry
+at position i, j represents the log probability of beginning at the start 
+of the sequence, and summing over all paths to align observation i to hidden
+state j. This state can be recovered by pulling it from model.states[j].
 
 >>> model.forward(sequence)
--5.0835566644993735
+[[       -inf        -inf        -inf  0.        ]
+ [-2.37704475 -0.69314718 -2.1322948         -inf]
+ [-3.05961307 -1.43914762 -2.86809348        -inf]
+ [-3.80752847 -2.1749463  -3.60588302        -inf]
+ [-4.53632138 -2.91273584 -4.34219628        -inf]
+ [-5.30367664 -3.6490491  -5.08355666        -inf]]
+
+In order to get the log probability of the full sequence given the model,
+you can write the following:
+
+>>> model.forward(sequence)[ len(sequence), model.end_index ]
+-5.0835566645
+
+The same paradigm is used for the backward algorithm. Indices i, j represent
+the probability of having aligned observation i to state j and continued
+aligning the remainder of the sequence till the end.
 
 >>> model.backward(sequence)
--5.0835566644993735
+[[-5.30670022 -5.30670022        -inf -5.08355666]
+ [-4.56069977 -4.56069977        -inf -4.33755622]
+ [-3.8249011  -3.8249011         -inf -3.60175755]
+ [-3.08711156 -3.08711156        -inf -2.863968  ]
+ [-2.3507983  -2.3507983         -inf -2.12765475]
+ [-1.60943791 -1.60943791  0.                -inf]]
+
+>>> model.backward(sequence)[ 0, model.start ]
+-5.0835566645
+
+The forward-backward algorithm is also implemented in a similar manner. It
+will return a tuple of the estimated transition probabilities given with that
+sequence and the table of log probabilities of the sum of all paths of the
+alignment of observation i with state j. Indices i, j represent having started
+at the beginning of the sequence, aligned observation i to state j, and then 
+continued on to align the remainder of the sequence to the model.
+
+>>> model.forward_backward(sequence)
+(array([[-2.03205947, -0.39913252, -1.61932212,        -inf],
+        [-2.03481952, -0.40209763, -1.60753724,        -inf],
+        [       -inf,        -inf,        -inf,        -inf],
+        [-1.85418786, -0.17029029,        -inf,        -inf]]), 
+array([[-1.85418786, -1.80095751, -1.81108336, -1.80356301, -1.82955788],
+       [-0.17029029, -0.18049206, -0.17850119, -0.17997747, -0.17493035],
+       [ 0.        ,  0.        ,  0.        ,  0.        ,  0.        ],
+       [ 0.        ,  0.        ,  0.        ,  0.        ,  0.        ]]))
 
 We can also find the most likely path, and the probability thereof, using the 
 Viterbi algorithm. This returns a tuple of the likelihood under the ML path and 
@@ -140,7 +208,7 @@ iteration, and stops if the improvement gets too small or actually goes
 negative.
 
 >>> sequences = [sequence]
->>> model.forward(sequence)
+>>> model.forward(sequence)[ len(sequence), model.end_index ]
 -5.0835566644993735
 
 >>> log_score = model.train(sequences)
@@ -159,7 +227,7 @@ Training improvement: 0.0067603436265
 Training improvement: 5.5971526649e-06
 Training improvement: 3.75166564481e-12
 
->>> model.forward(sequence)
+>>> model.forward(sequence)[ len(sequence), model.end_index ]
 4.9533088776424528
 
 Once you're done working with your model, you can write it out to a stream with 
@@ -181,29 +249,130 @@ uniform ExampleModel-end 0.333333333333
 uniform normal 0.666666666667
 uniform uniform 1.33322614629e-49
 
+Lets explore the bake method a little more. In addition to finalizing the
+internal structure of the model, it will normalize out-edge weights, and also
+merge silent states with a probability 1. edge between them to simplify the
+model. Lets see this in action.
+
+	model_a = Model( "model_a" )
+	s1 = State( NormalDistribution( 25., 1. ), name="S1" )
+	s2 = State( NormalDistribution( 13., 1. ), name="S2" )
+
+	model_a.add_state( s1 )
+	model_a.add_state( s2 )
+	model_a.add_transition( model.start, s1, 0.95 )
+	model_a.add_transition( s1, s1, 0.40 )
+	model_a.add_transition( s1, s2, 0.50 )
+	model_a.add_transition( s2, s1, 0.50 )
+	model_a.add_transition( s2, s2, 0.40 )
+	model_a.add_transition( s1, model.end, 0.1 )
+	model_a.add_transition( s2, model.end, 0.1 )
+
+	model_b = Model( "model_b" )
+	s3 = State( NormalDistribution( 34., 1. ), name="S3" )
+	s4 = State( NormalDistribution( 45., 1. ), name="S4" )
+
+	model_b.add_state( s3 )
+	model_b.add_state( s4 )
+	model_b.add_transition( model.start, s3, 1.0 )
+	model_b.add_transition( s3, s3, 0.50 )
+	model_b.add_transition( s3, s4, 0.30 )
+	model_b.add_transition( s4, s4, 0.20 )
+	model_b.add_transition( s4, s3, 0.30 )
+	model_b.add_transition( s4, model.end, 1.0 )
+
+If at this point we baked model_a and ran it, we'd get the following:
+
+>>> sequence = [ 24.57, 23.10, 11.56, 14.3, 36.4, 33.2, 44.2, 46.7 ]
+>>> model_a.bake( verbose=True )
+>>> print
+>>> print model_a.forward( sequence )
+>>> print
+>>> print model_a.forward( sequence )[ len(sequence), model_a.end_index ]
+model_a : model_a-start summed to 0.95, normalized to 1.0
+
+[[         -inf          -inf          -inf    0.        ]
+ [         -inf   -1.01138853   -3.31397363          -inf]
+ [ -53.62847425   -4.6516178    -6.95420289          -inf]
+ [  -7.30050351  -96.80364706   -9.60308861          -inf]
+ [  -9.98073278  -66.15758923  -12.28331787          -inf]
+ [-285.59596204  -76.57281849  -78.87540358          -inf]
+ [-282.2049042  -112.02804776 -114.33063285          -inf]
+ [-600.36013347 -298.18327702 -300.48586211          -inf]
+ [-867.64036273 -535.46350629 -537.76609138          -inf]]
+
+-537.766091379
+
+By setting verbose=True, we get a log that the out-edges from model.start have
+been normalized to 1.0. This forward log probability matrix is the same as if
+we had originally set the transition to 1.0
+
+If instead of the above, we concatenated the models and ran the code, we'd
+get the following:
+
+>>> sequence = [ 24.57, 23.10, 11.56, 14.3, 36.4, 33.2, 44.2, 46.7 ]
+>>> model_a.concatenate_model( model_b )
+>>> model_a.bake( verbose=True )
+>>> print
+>>> print model_a.forward( sequence )
+>>> print
+>>> print model_a.forward( sequence )[ len(sequence), model_a.end_index ]
+model_a : model_a-end (silent) - model_b-start (silent) merged
+model_a : model_a-start summed to 0.95, normalized to 1.0
+model_a : S3 summed to 0.8, normalized to 1.0
+
+[[         -inf          -inf          -inf          -inf          -inf		
+ -inf            0.]
+ [         -inf   -1.01138853          -inf          -inf   -3.31397363	
+ 	 -inf          -inf]
+ [ -63.63791216   -4.6516178           -inf  -53.62847425   -6.95420289	
+ 	 -inf          -inf]
+ [-259.64994142  -96.80364706 -624.65447995   -7.30050351   -9.60308861 
+ -624.65447995          -inf]
+ [-204.56702714  -66.15758923 -732.79470921   -9.98073278  -12.28331787	
+  	 -inf          -inf]
+ [ -16.0822564   -76.57281849 -243.44679492 -285.59596204  -78.87540358	
+ -243.44679492          -inf]
+ [ -17.79119857 -112.02804776  -87.60202419 -282.2049042  -114.33063285 
+  -87.60202419          -inf]
+ [ -71.20014073 -298.18327702  -20.01096635 -600.36013347 -300.48586211 
+  -20.01096635          -inf]
+ [-102.77887769 -535.46350629  -23.9843428  -867.64036273 -537.76609138 
+   -23.9843428          -inf]]
+
+-23.9843427976
+
+We see both bake processing operations in effect. Both model_a.start and S3 did
+not have properly summed out-edges, and needed to have them normalized. But now
+there was a useless edge between model_a.end and model_b.start due to the
+concatenate method. This allowed those two states to be merged, speeding up
+later algorithms. We can also see that the addition of model_b made the sequence
+significantly more likely given the model, as a sanity check that
+concatenate_model really did work.
+
 As said above, this module provides a few distributions over floats by default:
 
-UniformDistribution(start, end)
+UniformDistribution( start, end )
 
-NormalDistribution(mean, std)
+NormalDistribution( mean, std )
 
-ExponentialDistribution(rate)
+ExponentialDistribution( rate )
 
-GammaDistribution(shape, rate) 
+GammaDistribution( shape, rate ) 
 (Note that this differs from the parameterization used in the random module, 
 even though the parameters have the same names.
 
-InverseGammaDistribution(shape, rate)
+InverseGammaDistribution( shape, rate )
 
-GaussianKernelDensity( points, bandwidth )
+GaussianKernelDensity( points, bandwidth, weights=None )
 
-UniformKernelDensity( points, bandwidth )
+UniformKernelDensity( points, bandwidth, weights=None )
 
-TriangleKernelDensity( points, bandwidth )
+TriangleKernelDensity( points, bandwidth, weights=None )
 
 MixtureDistribution( distributions, weights=None )
 
-The module also provides two other distributions 
+The module also provides two other distributions:
 
 DiscreteDistribution( characters )
 ( Allows you to pass in a dictionary of key: probability pairs )
@@ -352,10 +521,9 @@ BernoulliDistribution 0.4
 cimport cython
 from cython.view cimport array as cvarray
 from libc.math cimport log as clog, sqrt as csqrt, exp as cexp
-import math, random, collections, itertools, sys, bisect, time
+import math, random, collections, itertools as it, sys, bisect, time
 import networkx
 import scipy.stats, scipy.sparse, scipy.special
-import itertools as it
 
 import numpy
 cimport numpy
@@ -646,7 +814,7 @@ cdef class UniformDistribution(Distribution):
 		
 		if weights is not None:
 			# Throw out items with weight 0
-			items = [item for (item, weight) in itertools.izip(items, weights) 
+			items = [item for (item, weight) in it.izip(items, weights) 
 				if weight > 0]
 		
 		if len(items) == 0:
@@ -1064,7 +1232,7 @@ cdef class DiscreteDistribution(Distribution):
 		self.name = "DiscreteDistribution"
 
 
-	def log_probability(self, symbol, pseudocounts=False ):
+	def log_probability(self, symbol, pseudocounts=None ):
 		"""
 		What's the probability of the given symbol under this distribution?
 		Simply the log probability value given at initiation. If the symbol
@@ -1076,8 +1244,8 @@ cdef class DiscreteDistribution(Distribution):
 			return log( self.parameters[0][symbol] )
 		else:
 			if pseudocounts:
-				return 1e-8
-			return float("-inf")     
+				return pseudocounts
+			return NEGINF    
 			
 	def sample(self):
 		"""
@@ -1091,21 +1259,28 @@ cdef class DiscreteDistribution(Distribution):
 				return key
 			rand -= value
 	
-	@classmethod
-	def from_sample(cls, items):
+	def from_sample( self, items, weights=None ):
 		"""
 		Takes in an iterable representing samples from a distribution and
-		turn it into a discrete distribution.
+		turn it into a discrete distribution. If no weights are provided,
+		each sample is weighted equally. If weights are provided, they are
+		normalized to sum to 1 and used.
 		"""
 
 		n = len(items)
+		if weights:
+			weights = numpy.array(weights) / numpy.sum(weights)
+		else:
+			weights = numpy.ones(n) / n
+
 		characters = {}
-		for character in items:
+		for character, weight in it.izip( items, weights ):
 			try:
-				characters[character] += 1. / n
+				characters[character] += 1. * weight
 			except KeyError:
-				characters[character] = 1. / n
-		return cls( characters )
+				characters[character] = 1. * weight
+
+		self.parameters = [ characters ]
 
 # Register the DiscreteDistribution
 DiscreteDistribution.register()
@@ -1152,12 +1327,24 @@ cdef class GaussianKernelDensity( Distribution ):
 	the sum of the Gaussian distance of the new point from every other point.
 	"""
 
+	cdef double [:] weights
 	cdef numpy.ndarray points
 
-	def __init__( self, points, bandwidth=1 ):
-		# Take in the points which are in one dimension
+	def __init__( self, points, bandwidth=1, weights=None ):
+		"""
+		Take in points, bandwidth, and appropriate weights. If no weights
+		are provided, a uniform weight of 1/n is provided to each point.
+		Weights are scaled so that they sum to 1. 
+		"""
+
+		n = len(points)
+		if weights:
+			self.weights = numpy.array(weights) / numpy.sum(weights)
+		else:
+			self.weights = numpy.ones( n ) / n 
+
 		self.points = numpy.array( points )
-		self.parameters = [ points, bandwidth ]
+		self.parameters = [ self.points, bandwidth, self.weights ]
 		self.name = "GaussianKernelDensity"
 
 	def log_probability( self, symbol ):
@@ -1175,30 +1362,42 @@ cdef class GaussianKernelDensity( Distribution ):
 		Actually calculate it here.
 		"""
 		cdef double bandwidth = self.parameters[1]
-		cdef double s = 0, log_p, mu
+		cdef double mu, scalar = 1.0 / SQRT_2_PI
 		cdef int i = 0, n = len(self.points)
+		cdef double distribution_prob = 0, point_prob
 
 		for i in xrange( n ):
+			# Go through each point sequentially
 			mu = self.points[i]
-			s = s + ( 1.0 / SQRT_2_PI * cexp( -0.5 * ((mu-symbol)/bandwidth) ** 2 ) ) / n
 
-		return _log(s)
+			# Calculate the probability under that point
+			point_prob = scalar * \
+				cexp( -0.5 * (( mu-symbol ) / bandwidth) ** 2 )
+
+			# Scale that point according to the weight 
+			distribution_prob += point_prob * self.weights[i]
+
+		# Return the log of the sum of the probabilities
+		return _log( distribution_prob )
 
 	def sample( self ):
 		"""
-		Return a random sample from the kernel density.
+		Generate a random sample from this distribution. This is done by first
+		selecting a random point, weighted by weights if the points are weighted
+		or uniformly if not, and then randomly sampling from that point's PDF.
 		"""
 
-		mu = random.choice( self.points )
+		mu = numpy.random.choice( self.points, p=self.weights )
 		return random.gauss( mu, self.parameters[1] )
 
 	@classmethod
-	def from_sample( cls, items ):
+	def from_sample( self, items, bandwidth=None, weights=None ):
 		"""
 		Replace the points.
 		"""
 
-		return cls( numpy.array( items ) )
+		return GaussianKernelDensity( items, 
+			bandwidth=bandwidth or self.parameters[1], weights=weights )
 
 # Register the GaussianKernelDensity
 GaussianKernelDensity.register() 
@@ -1210,12 +1409,24 @@ cdef class UniformKernelDensity( Distribution ):
 	the sum of the Gaussian distances of the new point from every other point.
 	"""
 	
+	cdef double [:] weights
 	cdef numpy.ndarray points
 
-	def __init__( self, points, bandwidth=1 ):
-		# Takes in the points which are in one dimension
+	def __init__( self, points, bandwidth=1, weights=None ):
+		"""
+		Take in points, bandwidth, and appropriate weights. If no weights
+		are provided, a uniform weight of 1/n is provided to each point.
+		Weights are scaled so that they sum to 1. 
+		"""
+
+		n = len(points)
+		if weights:
+			self.weights = numpy.array(weights) / numpy.sum(weights)
+		else:
+			self.weights = numpy.ones( n ) / n 
+
 		self.points = numpy.array( points )
-		self.parameters = [ points, bandwidth ]
+		self.parameters = [ self.points, bandwidth, self.weights ]
 		self.name = "UniformKernelDensity"
 
 	def log_probability( self, symbol ):
@@ -1232,28 +1443,44 @@ cdef class UniformKernelDensity( Distribution ):
 		Actually do math here.
 		"""
 
-		cdef double s = 0, mu
+		cdef double mu
+		cdef double distribution_prob=0, point_prob
 		cdef int i = 0, n = len( self.points )
 
 		for i in xrange( n ):
+			# Go through each point sequentially
 			mu = self.points[i]
-			if abs( mu - symbol ) <= self.parameters[1]:
-				s = s + 1. / n
 
-		return _log(s)
+			# The good thing about uniform distributions if that
+			# you just need to check to make sure the point is within
+			# a bandwidth.
+			if abs( mu - symbol ) <= self.parameters[1]:
+				point_prob = 1
+
+			# Properly weight the point before adding it to the sum
+			distribution_prob += point_prob * self.weights[i]
+
+		# Return the log of the sum of probabilities
+		return _log( distribution_prob )
 	
 	def sample( self ):
-		mu = random.choice( self.points )
+		"""
+		Generate a random sample from this distribution. This is done by first
+		selecting a random point, weighted by weights if the points are weighted
+		or uniformly if not, and then randomly sampling from that point's PDF.
+		"""
+
+		mu = numpy.random.choice( self.points, p=self.weights )
 		bandwidth = self.parameters[1]
 		return random.uniform( mu-bandwidth, mu+bandwidth )
 
-	@classmethod
-	def from_sample( cls, items ):
+	def from_sample( self, items, bandwidth=None, weights=None ):
 		"""
 		Replace the points.
 		"""
 
-		return cls( numpy.array( items ) )
+		return UniformKernelDensity( items, 
+			bandwidth=bandwidth or self.parameters[1], weights=weights )
 
 # Register the UniformKernelDensity
 UniformKernelDensity.register()
@@ -1265,12 +1492,24 @@ cdef class TriangleKernelDensity( Distribution ):
 	the sum of the Gaussian distances of the new point from every other point.
 	"""
 
+	cdef double [:] weights
 	cdef numpy.ndarray points
 
-	def __init__( self, points, bandwidth=1 ):
-		# Takes in the points which are in one dimension
+	def __init__( self, points, bandwidth=1, weights=None ):
+		"""
+		Take in points, bandwidth, and appropriate weights. If no weights
+		are provided, a uniform weight of 1/n is provided to each point.
+		Weights are scaled so that they sum to 1. 
+		"""
+
+		n = len(points)
+		if weights:
+			self.weights = numpy.array(weights) / numpy.sum(weights)
+		else:
+			self.weights = numpy.ones( n ) / n 
+
 		self.points = numpy.array( points )
-		self.parameters = [ points, bandwidth ]
+		self.parameters = [ self.points, bandwidth, self.weights ]
 		self.name = "TriangleKernelDensity"
 
 	def log_probability( self, symbol ):
@@ -1286,30 +1525,44 @@ cdef class TriangleKernelDensity( Distribution ):
 		"""
 		Actually do math here.
 		"""
+
 		cdef double bandwidth = self.parameters[1]
-		cdef double s = 0, distance, mu
+		cdef double mu
+		cdef double distribution_prob=0, point_prob
 		cdef int i = 0, n = len( self.points )
 
 		for i in xrange( n ):
+			# Go through each point sequentially
 			mu = self.points[i]
-			distance = abs( mu - symbol )
-			if distance <= bandwidth:
-				s = s + ( bandwidth - distance ) / n
 
-		return _log(s)
+			# Calculate the probability for each point
+			point_prob = bandwidth - abs( mu - symbol ) 
+			if point_prob < 0:
+				point_prob = 0 
+
+			# Properly weight the point before adding to the sum
+			distribution_prob += point_prob * self.weights[i]
+
+		# Return the log of the sum of probabilities
+		return _log( distribution_prob )
 
 	def sample( self ):
-		mu = random.choice( self.points )
+		"""
+		Generate a random sample from this distribution. This is done by first
+		selecting a random point, weighted by weights if the points are weighted
+		or uniformly if not, and then randomly sampling from that point's PDF.
+		"""
+
+		mu = numpy.random.choice( self.points, p=self.weights )
 		bandwidth = self.parameters[1]
 		return random.triangular( mu-bandwidth, mu+bandwidth, mu )
 
-	@classmethod
-	def from_sample( cls, items ):
+	def from_sample( self, items, weights=None ):
 		"""
 		Replace the points.
 		"""
 
-		return cls( numpy.array( items ) )
+		return TriangleKernelDensity( numpy.array( items ), weights=weights )
 
 # Register the TriangleKernelDensity
 TriangleKernelDensity.register()
@@ -1321,23 +1574,34 @@ cdef class MixtureDistribution( Distribution ):
 	distributions. Can also specify weights for the distributions.
 	"""
 
+	cdef double [:] weights
 	cdef list distributions
 
 	def __init__( self, distributions, weights=None ):
+		"""
+		Take in the distributions and appropriate weights. If no weights
+		are provided, a uniform weight of 1/n is provided to each point.
+		Weights are scaled so that they sum to 1. 
+		"""
 		n = len(distributions)
-		weights = weights or [ 1./n for i in xrange(n) ]
-		self.parameters = [ distributions, weights ]
+		if weights:
+			self.weights = numpy.array( weights ) / numpy.sum( weights )
+		else:
+			self.weights = numpy.ones(n) / n
+
+		self.parameters = [ distributions, self.weights ]
 		self.name = "MixtureDistribution"
 
 	def log_probability( self, symbol ):
 		"""
 		What's the probability of a given float under this mixture? It's
-		the sum of the distances from the symbol calculated under all
-		distributions.
+		the log-sum-exp of the distances from the symbol calculated under all
+		distributions. Currently in python, not cython, to allow for dovetyping
+		of both numeric and not-necessarily-numeric distributions. 
 		"""
 
 		(d, w), n = self.parameters, len( self.parameters) 
-		return log( sum( exp( d[i](symbol) ) * w[i] for i in xrange(n) ) )
+		return _log(numpy.sum(cexp( d[i](symbol) ) * w[i] for i in xrange(n)))
 
 	def sample( self ):
 		"""
@@ -1350,6 +1614,16 @@ cdef class MixtureDistribution( Distribution ):
 			if w > i:
 				return d.sample()
 			i -= w 
+
+	def from_sample( self, items, weights=None ):
+		"""
+		Currently not implemented, but should be some form of GMM estimation
+		on the data. The issue would be that the MixtureModel can be more
+		expressive than a GMM estimation, since GMM estimation is one type
+		of distribution.
+		"""
+
+		raise NotImplementedError
 
 cdef class State(object):
 	"""
@@ -1657,11 +1931,23 @@ cdef class Model(object):
 		def __set__( self, state ):
 			self.start = state
 
+	property start_index:
+		def __get__( self ):
+			return self.start_index
+		def __set__( self, idx ):
+			self.start_index = idx
+
 	property end:
 		def __get__( self ):
 			return self.end
 		def __set__( self, state ):
 			self.end = state
+
+	property end_index:
+		def __get__( self ):
+			return self.end_index
+		def __set__( self, idx ):
+			self.end_index = idx
 
 	property name:
 		def __get__( self ):
@@ -1760,9 +2046,9 @@ cdef class Model(object):
 		"""
 		Add a transition from state a to state b with the given (non-log)
 		probability. Both states must be in the HMM already. self.start and
-		self.end are valid arguments here. Probabilities are not normalized, so 
-		all states (except the end state) must have transitions out of them with
-		probabilities summing to 1.
+		self.end are valid arguments here. Probabilities will be normalized
+		such that every node has edges summing to 1. leaving that node, but
+		only when the model is baked.
 		"""
 		
 		# Add the transition
@@ -1785,7 +2071,8 @@ cdef class Model(object):
 		"""
 		Given another model, concatenate it in such a manner that you simply
 		add a transition of probability 1 from self.end to other.start, and
-		end at other.end.
+		end at other.end. One of these silent states will be removed when
+		the model is baked, due to the graph simplification routine.
 		"""
 
 		# Unify the graphs (requiring disjoint states)
@@ -2022,15 +2309,16 @@ cdef class Model(object):
 	def forward( self, sequence ):
 		'''
 		Python wrapper for the forward algorithm, calculating probability by
-		going forward through a sequence. 
+		going forward through a sequence. Returns the full forward DP matrix,
+		in addition to a 
 		'''
 
-		return self._forward( numpy.array( sequence ) )
+		return numpy.array( self._forward( numpy.array( sequence ) ) )
 
-	cdef double _forward( self, numpy.ndarray sequence ):
+	cdef double [:,:] _forward( self, numpy.ndarray sequence ):
 		"""
-		Run the forward algorithm, and return the log probability of the given 
-		sequence. Sequence is a container of symbols.
+		Run the forward algorithm, and return the matrix of log probabilities
+		of each segment being in each hidden state. 
 		
 		Initializes self.f, the forward algorithm DP table.
 		
@@ -2154,9 +2442,8 @@ cdef class Model(object):
 		# Save the table for future use
 		self.f = f
 		# Now the DP table is filled in
-		# Just get the log-probability of being in the (silent) ending state
-		# at the end of the sequence
-		return f[ n, self.end_index ]
+		# Return the entire table
+		return f
 
 
 	def backward( self, sequence ):
@@ -2166,9 +2453,9 @@ cdef class Model(object):
 		beginning.
 		'''
 
-		return self._backward( numpy.array( sequence ) )
+		return numpy.array( self._backward( numpy.array( sequence ) ) )
 
-	cdef double _backward( self, numpy.ndarray sequence ):
+	cdef double [:,:] _backward( self, numpy.ndarray sequence ):
 		"""
 		Run the backward algorithm, and return the log probability of the given 
 		sequence. Sequence is a container of symbols.
@@ -2360,10 +2647,136 @@ cdef class Model(object):
 		# Save the DP table for future use
 		self.b = b
 
-		# Now the DP table is filled in. Just get the log-probability of
-		# emitting all the symbols of the sequence, given we are in the (silent)
-		# starting state.
-		return b[0, self.start_index]
+		# Now the DP table is filled in. 
+		# Return the entire table.
+		return b
+
+	def forward_backward( self, sequence ):
+		"""
+		Implements the forward-backward algorithm.
+		"""
+
+		return self._forward_backward( numpy.array( sequence ) )
+
+	cdef tuple _forward_backward( self, numpy.ndarray sequence ):
+		"""
+		Actually perform the math here.
+		"""
+
+		cdef int i, k, l
+		cdef int m = len( self.states ), n = len( sequence )
+		cdef double [:,:] transition_log_probabilities = \
+			numpy.array( self.transition_log_probabilities ) 
+		# Find the expected number of transitions between each pair of states, 
+		# given our data and our current parameters, but allowing the paths 
+		# taken to vary. (Indexed: from, to)
+		cdef double [:,:] expected_transitions = numpy.zeros((m, m))
+		cdef double [:,:] emission_weights = numpy.zeros((m, n))
+
+		cdef double log_sequence_probability
+		cdef double log_transition_emission_probability_sum
+
+		# Get the overall log probability of the sequence, and fill in self.f
+		log_sequence_probability = self.forward( sequence )[n, self.end_index]
+			
+		# Is the sequence impossible? If so, don't bother calculating any more.
+		if log_sequence_probability == NEGINF:
+			print "Warning: Sequence is impossible."
+			return NEGINF
+			
+		# Fill in self.b too
+		self.backward( sequence )
+			
+		for k in xrange( m ):
+			# For each state we could have come from
+			for l in xrange( self.silent_start ):
+				# For each state we could go to (and emit a character)
+			
+				# Sum up probabilities that we later normalize by 
+				# probability of sequence.
+				log_transition_emission_probability_sum = NEGINF
+				for i in xrange( n ):
+					# For each character in the sequence
+					# Add probability that we start and get up to state k, 
+					# and go k->l, and emit the symbol from l, and go from l
+					# to the end.
+					log_transition_emission_probability_sum = pair_lse( 
+						log_transition_emission_probability_sum, 
+						self.f[i, k] + transition_log_probabilities[k, l] +
+						self.states[l].distribution.log_probability( 
+							sequence[i] ) + self.b[ i+1, l ] )
+
+				# Now divide by probability of the sequence to make it given
+				# this sequence, and add as this sequence's contribution to 
+				# the expected transitions matrix's k, l entry.
+				expected_transitions[k, l] += cexp(
+					log_transition_emission_probability_sum - 
+					log_sequence_probability )
+						
+			for l in xrange( self.silent_start, m ):
+				# For each silent state we can go to on the same character
+					
+				# Sum up probabilities that we later normalize by 
+				# probability of sequence.
+				log_transition_emission_probability_sum = NEGINF
+				for i in xrange( n+1 ):
+					# For each row in the forward DP table (where we can
+					# have transitions to silent states) of which we have 1 
+					# more than we have symbols...
+						
+					# Add probability that we start and get up to state k, 
+					# and go k->l, and go from l to the end. In this case, 
+					# we use forward and backward entries from the same DP 
+					# table row, since no character is being emitted.
+					log_transition_emission_probability_sum = pair_lse( 
+						log_transition_emission_probability_sum, 
+						self.f[i, k] + transition_log_probabilities[k, l] 
+						+ self.b[i, l] )
+					
+				# Now divide by probability of the sequence to make it given
+				# this sequence, and add as this sequence's contribution to 
+				# the expected transitions matrix's k, l entry.
+				expected_transitions[k, l] += cexp(
+					log_transition_emission_probability_sum -
+					log_sequence_probability )
+				
+			if k < self.silent_start:
+				# Now think about emission probabilities from this state
+						  
+				for i in xrange( n ):
+					# For each symbol that came out
+		   
+					# What's the weight of this symbol for that state?
+					# Probability that we emit index characters and then 
+					# transition to state l, and that from state l we  
+					# continue on to emit len(sequence) - (index + 1) 
+					# characters, divided by the probability of the 
+					# sequence under the model.
+					# According to http://www1.icsi.berkeley.edu/Speech/
+					# docs/HTKBook/node7_mn.html, we really should divide by
+					# sequence probability.
+					emission_weights[k,i] = self.f[i+1, k] + self.b[i+1, k] - \
+						log_sequence_probability
+
+		# Normalize transition expectations per row (so it becomes transition 
+		# probabilities)
+		# See http://stackoverflow.com/a/8904762/402891
+		cdef double norm
+
+		for i in xrange( m ):
+			norm = 0
+			for l in xrange( m ):
+				norm += expected_transitions[i, l]
+
+			if norm == 0:
+				continue
+
+			for l in xrange( m ):
+				transition_log_probabilities[i, l] = \
+					_log( expected_transitions[i, l] ) - _log( norm )
+
+		return numpy.array( transition_log_probabilities ), \
+			numpy.array( emission_weights )
 
 	def viterbi(self, sequence):
 		'''
@@ -2694,8 +3107,8 @@ cdef class Model(object):
 		return hmm
 	
 	@classmethod
-	def from_matrix( cls, matrix, distributions, starts, ends,
-		names=None, model_name=None ):
+	def from_matrix( cls, transition_probabilities, distributions, starts, ends,
+		state_names=None, name=None ):
 		"""
 		Take in a 2D matrix of floats of size n by n, which are the transition
 		probabilities to go from any state to any other state. May also take in
@@ -2705,28 +3118,33 @@ cdef class Model(object):
 		the probability of starting in a state, and a list of size n indicating
 		the probability of ending in a state.
 
-		For example, if you wanted a model with two states, A and B, and an
-		equal chance of switching between the two and two different gaussian
-		emissions, you would do the following:
+		For example, if you wanted a model with two states, A and B, and a 0.5
+		probability of switching to the other state, 0.4 probability of staying
+		in the same state, and 0.1 probability of ending, you'd write the HMM
+		like this:
 
-		matrix = [ [ 0.5, 0.5 ], [ 0.5, 0.5 ] ]
-		distributions = [ NormalDistribution( 1, .5 ), NormalDistribution( 5, 2 ) ]
+		matrix = [ [ 0.4, 0.5 ], [ 0.4, 0.5 ] ]
+		distributions = [NormalDistribution(1, .5), NormalDistribution(5, 2)]
 		starts = [ 1., 0. ]
-		ends = [ 0., 1. ]
-		names= [ "A", "B" ]
+		ends = [ .1., .1 ]
+		state_names= [ "A", "B" ]
 
-
-		model = Model.from_matrix( matrix, distributions, starts, ends, names )
-
+		model = Model.from_matrix( matrix, distributions, starts, ends, 
+			state_names, name="test_model" )
 		"""
 
 		# Build the initial model
-		model = Model( name=model_name )
+		model = Model( name=name )
 
 		# Build state objects for every state with the appropriate distribution
 		states = [ State( distribution, name=name ) for name, distribution in
-			itertools.izip( names, distributions) ]
+			it.izip( state_names, distributions) ]
+
 		n = len( states )
+
+		# Add all the states to the model
+		for state in states:
+			model.add_state( state )
 
 		# Connect the start of the model to the appropriate state
 		for i, prob in enumerate( starts ):
@@ -2735,7 +3153,7 @@ cdef class Model(object):
 
 		# Connect all states to each other if they have a non-zero probability
 		for i in xrange( n ):
-			for j, prob in enumerate( matrix[i] ):
+			for j, prob in enumerate( transition_probabilities[i] ):
 				if prob != 0.:
 					model.add_transition( states[i], states[j], prob )
 
@@ -2747,8 +3165,43 @@ cdef class Model(object):
 		model.bake()
 		return model
 
-	def train(self, sequences, stop_threshold=1E-9, min_iterations=0,
-		 transition_pseudocount=0 ):
+	def train( self, sequences, stop_threshold=1E-9, min_iterations=0,
+		algorithm='baum-welch' ):
+		"""
+		Given a list of sequences, performs re-estimation on the model
+		parameters. The two supported algorithms are "baum-welch" and
+		"viterbi," indicating their respective algorithm. Neither algorithm
+		makes use of inertia, meaning that the previous graph model is
+		thrown out and replaced with the one generated from the training
+		algorithm.
+
+		Baum-Welch: Iterates until the log of the "score" (total likelihood of 
+		all sequences) changes by less than stop_threshold. Returns the final 
+		log score.
+	
+		
+		Always trains for at least min_iterations.
+
+		Viterbi: Training performed by running each sequence through the
+		viterbi decoding algorithm. Edge weight re-estimation is done by 
+		recording the number of times a hidden state transitions to another 
+		hidden state, and using the percentage of time that edge was taken.
+		Emission re-estimation is done by retraining the distribution on
+		every sample tagged as belonging to that state.
+
+		Baum-Welch training is usually the more accurate method, but takes
+		significantly longer. Viterbi is a good for situations in which
+		accuracy can be sacrificed for time.
+		"""
+
+		if algorithm.lower() == 'baum-welch':
+			return self._train_baum_welch( sequences, stop_threshold,
+				min_iterations )
+		if algorithm.lower() == 'viterbi':
+			return self._train_viterbi( sequences )
+
+	def _train_baum_welch(self, sequences, stop_threshold=1E-9, 
+		min_iterations=0 ):
 		"""
 		Given a list of sequences, perform Baum-Welch iterative re-estimation on
 		the model parameters.
@@ -2757,18 +3210,12 @@ cdef class Model(object):
 		sequences) changes by less than stop_threshold. Returns the final log
 		score.
 		
-		transition_pseudocount is added to the expected count of every 
-		transition already thought to be possible in the model. It prevents 
-		training from deciding a transition is impossible if it's supposed to be
-		possible but never observed.
-		
 		Always trains for at least min_iterations.
 		"""
 
 		sequences = numpy.array( sequences )
 		# What's the current log score?
-		log_score = self.train_once(sequences,
-			transition_pseudocount=transition_pseudocount)
+		log_score = self._train_once_baum_welch(sequences)
 		# This holds how much we improve each step
 		improvement = float("+inf")
 
@@ -2776,8 +3223,7 @@ cdef class Model(object):
 		iteration = 1
 		while improvement > stop_threshold or iteration < min_iterations:
 			# train again and get the new score
-			new_log_score = self.train_once(sequences, 
-				transition_pseudocount=transition_pseudocount)
+			new_log_score = self._train_once_baum_welch(sequences)
 			
 			iteration += 1
 			
@@ -2790,282 +3236,7 @@ cdef class Model(object):
 			
 		return log_score
 
-	def forward_backward( self, sequence ):
-		"""
-		Implements the forward-backward algorithm.
-		"""
-
-		m, n = len( self.states ), len( sequence )
-		transition_log_probabilities = numpy.array( self.transition_log_probabilities ) 
-		# Find the expected number of transitions between each pair of states, 
-		# given our data and our current parameters, but allowing the paths 
-		# taken to vary. (Indexed: from, to)
-		expected_transitions = numpy.zeros((m, m))
-		emission_weights = numpy.zeros((m, n))
-
-		# Get the overall log probability of the sequence, and fill in self.f
-		log_sequence_probability = self.forward( sequence )
-			
-		# Is the sequence impossible? If so, don't bother calculating any more.
-		if log_sequence_probability == NEGINF:
-			print "Warning: Sequence is impossible."
-			return NEGINF
-			
-		# Fill in self.b too
-		self.backward( sequence )
-			
-		for k in xrange( m ):
-			# For each state we could have come from
-			for l in xrange( self.silent_start ):
-				# For each state we could go to (and emit a character)
-			
-				# Sum up probabilities that we later normalize by 
-				# probability of sequence.
-				log_transition_emission_probability_sum = NEGINF
-				for i in xrange( n ):
-					# For each character in the sequence
-					# Add probability that we start and get up to state k, 
-					# and go k->l, and emit the symbol from l, and go from l
-					# to the end.
-					log_transition_emission_probability_sum = pair_lse( 
-						log_transition_emission_probability_sum, 
-						self.f[i, k] + transition_log_probabilities[k, l] +
-						self.states[l].distribution.log_probability( 
-							sequence[i] ) + self.b[ i+1, l ] )
-
-				# Now divide by probability of the sequence to make it given
-				# this sequence, and add as this sequence's contribution to 
-				# the expected transitions matrix's k, l entry.
-				expected_transitions[k, l] += cexp(
-					log_transition_emission_probability_sum - 
-					log_sequence_probability )
-						
-			for l in xrange( self.silent_start, m ):
-				# For each silent state we can go to on the same character
-					
-				# Sum up probabilities that we later normalize by 
-				# probability of sequence.
-				log_transition_emission_probability_sum = NEGINF
-				for i in xrange( n+1 ):
-					# For each row in the forward DP table (where we can
-					# have transitions to silent states) of which we have 1 
-					# more than we have symbols...
-						
-					# Add probability that we start and get up to state k, 
-					# and go k->l, and go from l to the end. In this case, 
-					# we use forward and backward entries from the same DP 
-					# table row, since no character is being emitted.
-					log_transition_emission_probability_sum = pair_lse( 
-						log_transition_emission_probability_sum, 
-						self.f[i, k] + transition_log_probabilities[k, l] 
-						+ self.b[i, l] )
-					
-				# Now divide by probability of the sequence to make it given
-				# this sequence, and add as this sequence's contribution to 
-				# the expected transitions matrix's k, l entry.
-				expected_transitions[k, l] += cexp(
-					log_transition_emission_probability_sum -
-					log_sequence_probability )
-				
-			if k < self.silent_start:
-				# Now think about emission probabilities from this state
-						  
-				for i in xrange( n ):
-					# For each symbol that came out
-		   
-					# What's the weight of this symbol for that state?
-					# Probability that we emit index characters and then 
-					# transition to state l, and that from state l we  
-					# continue on to emit len(sequence) - (index + 1) 
-					# characters, divided by the probability of the 
-					# sequence under the model.
-					# According to http://www1.icsi.berkeley.edu/Speech/
-					# docs/HTKBook/node7_mn.html, we really should divide by
-					# sequence probability.
-					emission_weights[k,i] = cexp( self.f[i+1, k] + self.b[i+1, k] -
-						log_sequence_probability )
-
-		# Normalize transition expectations per row (so it becomes transition 
-		# probabilities)
-		# See http://stackoverflow.com/a/8904762/402891
-		row_norms = expected_transitions.sum(axis=1)
-		
-		# Only modifies transitions for states a transition was observed from.
-		# Work in log space
-		transition_log_probabilities[row_norms != 0, :] = (
-			log(expected_transitions[row_norms != 0, :])  -
-			log(row_norms[row_norms != 0][:, numpy.newaxis]))
-
-		return transition_log_probabilities, emission_weights
-
-	def train_once(self, sequences, transition_pseudocount=0):
-		"""
-		Implements one iteration of the Baum-Welch algorithm, as described in:
-		http://www.cs.cmu.edu/~durand/03-711/2006/Lectures/hmm-bw.pdf
-		
-		Returns the log of the "score" under the *previous* set of parameters. 
-		The score is the sum of the likelihoods of all the sequences.
-		
-		Algorithm is generalized to work with silent states, and with continuous
-		distributions according to the method that Prof. Karplus told me.
-		
-		transition_pseudocount is added to the expected count of every 
-		transition already thought to be possible in the model. It prevents 
-		training from deciding a transition is impossible if it's supposed to be
-		possible but never observed.
-		"""        
-		
-		transition_log_probabilities = numpy.array( self.transition_log_probabilities ) 
-		# Find the expected number of transitions between each pair of states, 
-		# given our data and our current parameters, but allowing the paths 
-		# taken to vary. (Indexed: from, to)
-		expected_transitions = numpy.zeros((len(self.states), len(self.states)))
-		
-		# We also need to keep a list of all emitted symbols, and a list of 
-		# weights for each state for each of those symbols.
-		# This is the concatenated list of emitted symbols
-		emitted_symbols = []
-
-		# This is a list lists of symbol weights, by state number, for 
-		# non-silent states
-		emission_weights = [[] for i in xrange(self.silent_start)]
-		
-		# Sum up the score to return
-		log_score = float("-inf")
-		
-		for sequence in sequences:
-			# Calculate the emission table
-			e = numpy.zeros(( len( sequence ), self.silent_start )) 
-			for k in xrange( len( sequence ) ):
-				for i in xrange( self.silent_start ):
-					e[k, i] = self.states[i].distribution.log_probability( sequence[k] )
-
-			# Get the overall log probability of the sequence, and fill in self.f
-			log_sequence_probability = self.forward(sequence)
-			
-			# Is the sequence impossible? If so, we can't train on it, so skip 
-			# it
-			if log_sequence_probability == float("-inf"):
-				print "Warning: skipped impossible sequence {}".format(sequence)
-				continue
-			
-			# Add to the score
-			log_score = pair_lse( log_score, log_sequence_probability )
-			
-			# Fill in self.b too
-			self.backward(sequence)
-			
-			# Save the sequence in the running list of all emitted symbols
-			for symbol in sequence:
-				emitted_symbols.append(symbol)
-			
-			for k in xrange(len(self.states)):
-				# For each state we could have come from
-				for l in xrange(self.silent_start):
-					# For each state we could go to (and emit a character)
-			
-					# Sum up probabilities that we later normalize by 
-					# probability of sequence.
-					log_transition_emission_probability_sum = float("-inf")
-					for (index, symbol) in enumerate(sequence):
-						# For each character in the sequence
-						# Add probability that we start and get up to state k, 
-						# and go k->l, and emit the symbol from l, and go from l
-						# to the end.
-						log_transition_emission_probability_sum = pair_lse( 
-							log_transition_emission_probability_sum, 
-							self.f[index, k] + 
-							transition_log_probabilities[k, l] + 
-							e[index, l] + self.b[ index+1, l ] )
-
-					# Now divide by probability of the sequence to make it given
-					# this sequence, and add as this sequence's contribution to 
-					# the expected transitions matrix's k, l entry.
-					expected_transitions[k, l] += cexp(
-						log_transition_emission_probability_sum - 
-						log_sequence_probability)
-						
-				for l in xrange(self.silent_start, len(self.states)):
-					# For each silent state we can go to on the same character
-					
-					# Sum up probabilities that we later normalize by 
-					# probability of sequence.
-					log_transition_emission_probability_sum = float("-inf")
-					for index in xrange(len(sequence) + 1):
-						# For each row in the forward DP table (where we can
-						# have transitions to silent states) of which we have 1 
-						# more than we have symbols...
-						
-						# Add probability that we start and get up to state k, 
-						# and go k->l, and go from l to the end. In this case, 
-						# we use forward and backward entries from the same DP 
-						# table row, since no character is being emitted.
-						log_transition_emission_probability_sum = pair_lse( 
-							log_transition_emission_probability_sum, 
-							self.f[index, k] + transition_log_probabilities[k, l] 
-							+ self.b[index, l] )
-					
-					# Now divide by probability of the sequence to make it given
-					# this sequence, and add as this sequence's contribution to 
-					# the expected transitions matrix's k, l entry.
-					expected_transitions[k, l] += cexp(
-						log_transition_emission_probability_sum -
-						log_sequence_probability)
-				
-				if k < self.silent_start:
-					# Now think about emission probabilities from this state
-						  
-					for (index) in xrange(len(sequence)):
-						# For each symbol that came out
-		   
-						# What's the weight of this symbol for that state?
-						# Probability that we emit index characters and then 
-						# transition to state l, and that from state l we  
-						# continue on to emit len(sequence) - (index + 1) 
-						# characters, divided by the probability of the 
-						# sequence under the model.
-						# According to http://www1.icsi.berkeley.edu/Speech/
-						# docs/HTKBook/node7_mn.html, we really should divide by
-						# sequence probability.
-						weight = cexp(self.f[index + 1, k] + 
-							self.b[index + 1, k] -
-							log_sequence_probability)
-						
-						# Add this weight to the weight list for this state
-						emission_weights[k].append(weight)
-		
-		# We now have expected_transitions taking into account all sequences.
-		# And a list of all emissions, and a weighting of each emission for each
-		# state
-		
-		# Normalize transition expectations per row (so it becomes transition 
-		# probabilities)
-		# See http://stackoverflow.com/a/8904762/402891
-		row_norms = expected_transitions.sum(axis=1)
-		
-		# Only modifies transitions for states a transition was observed from.
-		# Work in log space
-		transition_log_probabilities[row_norms != 0, :] = (
-			log(expected_transitions[row_norms != 0, :])  -
-			log(row_norms[row_norms != 0][:, numpy.newaxis]))
-					
-		for k in xrange(self.silent_start):
-			# Re-estimate the emission distribution for every non-silent state.
-			# Take each emission weighted by the probability that we were in 
-			# this state when it came out, given that the model generated the 
-			# sequence that the symbol was part of.
-			self.states[k].distribution.from_sample(emitted_symbols, 
-				weights=emission_weights[k])
-				
-		# Now we have updated out transition log probabilities, and our emission
-		# distributions.
-		
-		# Return the log total probability of all sequences (log score)
-		self.transition_log_probabilities = transition_log_probabilities
-		return log_score
-
-	cdef double _train_once(self, numpy.ndarray sequences, 
-		double transition_pseudocount ):
+	cdef double _train_once_baum_welch(self, numpy.ndarray sequences ):
 			"""
 			Implements one iteration of the Baum-Welch algorithm, as described in:
 			http://www.cs.cmu.edu/~durand/03-711/2006/Lectures/hmm-bw.pdf
@@ -3075,11 +3246,6 @@ cdef class Model(object):
 			
 			Algorithm is generalized to work with silent states, and with continuous
 			distributions according to the method that Prof. Karplus told me.
-			
-			transition_pseudocount is added to the expected count of every 
-			transition already thought to be possible in the model. It prevents 
-			training from deciding a transition is impossible if it's supposed to be
-			possible but never observed.
 			"""        
 			
 			cdef double [:,:] transition_log_probabilities 
@@ -3118,7 +3284,7 @@ cdef class Model(object):
 						e[k, i] = self.states[i].distribution.log_probability( sequence[k] )
 
 				# Get the overall log probability of the sequence, and fill in self.f
-				log_sequence_probability = self.forward(sequence)
+				log_sequence_probability = self.forward(sequence)[n, self.end_index]
 				
 				# Is the sequence impossible? If so, we can't train on it, so skip 
 				# it
@@ -3233,7 +3399,8 @@ cdef class Model(object):
 					continue
 
 				for l in xrange( m ):
-					transition_log_probabilities[i, l] = _log( expected_transitions[i, l] ) - _log( norm )
+					transition_log_probabilities[i, l] = \
+						_log( expected_transitions[i, l] ) - _log( norm )
 						
 			for k in xrange(self.silent_start):
 				# Re-estimate the emission distribution for every non-silent state.
@@ -3251,26 +3418,48 @@ cdef class Model(object):
 
 			return log_score
 
-	def viterbi_train( self, sequences ):
+	def _train_viterbi( self, sequences ):
 		"""
 		Performs a simple viterbi training algorithm. Each sequence is tagged
 		using the viterbi algorithm, and both emissions and transitions are
 		updated based on the probabilities in the observations.
 		"""
 
-		n = len( self.states )
-		idx = { node: i for node, i in it.izip( self.states, xrange(n) ) }
+		m = len( self.states )
+		indices = { node: i for node, i in it.izip( self.states, xrange(m) ) }
 
-		emissions = {}
-		expected_transitions = numpy.zeros( (n,n) )
+		log_score = NEGINF
+		emissions = {} 
+		expected_transitions = numpy.zeros( (m,m) )
 
 		for sequence in sequences:
+			n = len( sequence )
+
 			# Run the viterbi decoding on each observed sequence
-			prob, path = self.viterbi( sequence )
-			e_path = it.ifilter( lambda state: not state[1].is_silent(), path )
+			log_sequence_probability, sequence_path = self.viterbi( sequence )
+
+			# Filter out silent states, as they are not paired with an
+			# observation
+			filtered_path = filter( lambda state: not state[1].is_silent(), 
+				sequence_path )
+
+			# Update the log score 
+			log_score = pair_lse( log_score, log_sequence_probability )
+
+			# Assume that the starting character-generating hidden state is
+			# the first hidden state after the start
+			l = indices[ self.start ]
+			k = indices[ filtered_path[0][1] ]
+			expected_transitions[ l, k ] += 1
+
+			# Assume the last character-generating hidden state is the last
+			# hidden state before the end
+			l = indices[ filtered_path[-1][1] ]
+			k = indices[ self.end ]
+			expected_transitions[ l, k ] += 1
 
 			# Go through the path of character-generation states
-			for (i, state), obs in it.izip( e_path, sequence ):
+			for (i, state), obs in it.izip( filtered_path, sequence ):
 				# Add to a list of emissions from that state
 				try:
 					emissions[ state ].append( obs )
@@ -3278,8 +3467,10 @@ cdef class Model(object):
 					emissions[ state ] = [ obs ]
 
 			# Go through sequential pairs to add each edge to a matrix of counts
-			for hs, next_hs in it.izip( path[:-1], path[1:] ):
-				expected_transitions[ idx[ hs[1] ] ][ idx[ next_hs[1] ] ] += 1
+			for l, k in it.izip( xrange(n-1), xrange(1,n) ):
+				l = indices[ filtered_path[l][1] ] 
+				k = indices[ filtered_path[k][1] ]
+				expected_transitions[ l, k ] += 1
 
 		# Recalculate the emission distributions solely from new observations
 		for state, emissions in emissions.iteritems():
@@ -3296,3 +3487,5 @@ cdef class Model(object):
 
 		# Save the matrix as the new transition matrix
 		self.transition_log_probabilities = expected_transitions
+
+		return log_score
