@@ -18,8 +18,6 @@ from core import *
 from parsers import *
 from DataTypes import *
 
-import pyximport
-pyximport.install( setup_args={'include_dirs':np.get_include()} )
 from PyPore.calignment import cSegmentAligner
 from yahmm import *
 
@@ -346,7 +344,7 @@ class PSSM( object ):
 		log space upon initialization. 
 		'''
 
-		if type(msa) is list and type(msa[0]) is not list:
+		if hasattr( msa, '__iter__' ) and not hasattr( msa[0], '__iter__' ):
 			msa = [ msa ]
 
 		for profile in msa:
@@ -367,13 +365,8 @@ class PSSM( object ):
 				offset += 1
 				continue
 
-			#kd = KernelDensity( bandwidth=0.5 )
-			#kd.fit( [ [ mean ] for mean in column ] )
-
-
 			self.pssm.append( [ mean for mean in column ] )
 			self.consensus.append( np.mean( [mean for mean in column] ) )
-
 
 	def __getitem__( self, slice ):
 		'''
@@ -398,6 +391,13 @@ class PSSM( object ):
 
 
 class ProfileAligner( object ):
+	'''
+	A HMM based alignment option. Allows you to align profiles to other profiles,
+	where you can use as many sequences as you want for the master or the slave
+	sequences, as opposed to the matrix aligner where you can only align one
+	sequence to one other sequence at a time.
+	'''
+
 	def __init__( self, master, slave, bandwidth=1 ):
 		'''
 		Must take in a PSSM object or a list of whatever is being aligned. Both x and y must be a
@@ -693,7 +693,7 @@ class ProfileAligner( object ):
 
 	def repeat_alignment( self, low=0, high=60 ):
 		'''
-		Repeat alignment
+		Repeat alignment, incomplete
 		'''
 
 		profile = self._build_repeat( self.master, low, high )
@@ -710,6 +710,11 @@ class ProfileAligner( object ):
 			print sname
 
 class MultipleSequenceAligner( object ):
+	'''
+	A HMM-based multiple sequence aligner. It begins by performing a naive alignment on the sequences
+	and then performs iterative refinement to produce a better alignment.
+	'''
+	
 	def __init__( self, sequences, bandwidth=1 ):
 		self.sequences = sequences
 		self.bandwidth = bandwidth

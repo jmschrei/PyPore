@@ -117,7 +117,7 @@ class MemoryParse( object):
         self.starts = starts
         self.ends = ends
     def parse( self, current ):
-        return [ Segment( current=np.array(current[s:e], copy=True),
+        return [ Segment( current=np.array(current[int(s):int(e)], copy=True),
                           start=s,
                           duration=(e-s)/100000 ) for s, e in zip(self.starts, self.ends)]
 
@@ -218,6 +218,10 @@ def pairwise(iterable):
     return izip(a, b)
 
 class StatSplit( parser ):
+    """
+    DEPRECATED: USE SPEEDYSTATSPLIT.
+    """
+
     def __init__(self, min_width=1000, max_width=1000000, 
             min_gain_per_sample=0.03, 
                 window_width=10000,
@@ -499,14 +503,22 @@ class StatSplit( parser ):
             + self._segment_cumulative(split_at,end)
 
 class SpeedyStatSplit( parser ):
-    def __init__( self, min_width=1000, max_width=1000000, window_width=10000, min_gain_per_sample=0.03 ):
+    def __init__( self, min_width=100, max_width=1000000, window_width=10000, 
+        min_gain_per_sample=None, oversegmentation_rate=0.01,
+        prior_segments_per_second=10., sampling_freq=1.e4 ):
+
         self.min_width = min_width
         self.max_width = max_width
         self.min_gain_per_sample = min_gain_per_sample
         self.window_width = window_width
+        self.psps = prior_segments_per_second
+        self.over = oversegmentation_rate
+        self.sampling_freq = sampling_freq
 
     def parse( self, current ):
-        parser = FastStatSplit( self.min_width, self.max_width, self.window_width, self.min_gain_per_sample )
+        parser = FastStatSplit( self.min_width, self.max_width, 
+            self.window_width, self.min_gain_per_sample, self.over, self.psps,
+            self.sampling_freq )
         return parser.parse( current )
 
     def GUI( self ):
@@ -540,6 +552,8 @@ class SpeedyStatSplit( parser ):
         except:
             pass
 
+from cparsers import *
+
 #########################################
 # STATE PARSERS 
 #########################################
@@ -548,9 +562,10 @@ class snakebase_parser( parser ):
     '''
     A simple parser based on dividing when the peak-to-peak amplitude of a wave exceeds a certain threshold.
     '''
-    def __init__( self, threshold=1.5, merger_thresh = 2.0 ):
+
+    def __init__( self, threshold=1.5 ):
         self.threshold = threshold
-        self.merger_thresh = merger_thresh
+
     def parse( self, current ):
         # Take the derivative of the current first
         diff = np.abs( np.diff( current ) )
@@ -560,41 +575,39 @@ class snakebase_parser( parser ):
         cumsum = np.concatenate( ( [ np.cumsum( diff[ tics[i] : tics[i+1] ] ) for i in xrange( tics.shape[0]-1 ) ] ) )
         # Find the edges where the cumulative sum passes a threshold
         split_points = np.where( np.abs( np.diff( np.where( cumsum > self.threshold, 1, 0 ) ) ) == 1 )[0] + 1
-        # Merge states which don't pass a given t-score threshold
-        tics = merger( threshold = self.merger_thresh ).merge( split_points, current )
         # Return segments which do pass the threshold
         return [ Segment( current = current[ tics[i]: tics[i+1] ], start = tics[i] ) for i in xrange( 1, tics.shape[0] - 1, 2 ) ]
+
     def GUI( self ):
         threshDefault = "1.5"
-        mergerThreshDefault = "2.0"
 
         grid = Qt.QGridLayout()
         grid.setVerticalSpacing(0)
         grid.addWidget( Qt.QLabel( "Threshold" ), 0, 0 )
         self.threshInput = Qt.QLineEdit()
         self.threshInput.setToolTip("Peak to peak amplitude threshold, which if gone above, indicates a state transition.")
-        self.threshInput.setText( threshDefault )
-
-        grid.addWidget( Qt.QLabel( "Merger Threshold" ), 1, 0 )
-        self.mergerThreshInput = Qt.QLineEdit()
-        self.mergerThreshInput.setToolTip( "T-score that adjacent states must be away to prevent merger." )
-        self.mergerThreshInput.setText( mergerThreshDefault ) 
+        self.threshInput.setText( threshDefault ) 
 
         grid.addWidget( self.threshInput, 0, 1 )
         grid.addWidget( self.mergerThreshInput, 1, 1 )
         return grid
+
     def set_params( self ):
         self.threshold = float( self.threshInput.text() )
-        self.merger_thresh = float( self.mergerThreshInput.text() )
 
 class novakker_parser( parser ):
     '''
-    A reimplimentation by Jacob Schreiber of Adam Novak's original parser, to a more vectorized form.
+    This parser, implemented by Adam Novak, will attempt to do a filter-derivative based splitting.
+    It sets two thresholds, a high threshold, and a low threshold for the derivative. A split occurs
+    if the derivative goes above the high threshold, and has reached the low threshold since the last
+    time it hit the high threshold. This ensures that the current reaches a form of stability before
+    being split again.
     '''
-    def __init__( self, low_thresh=1, high_thresh=2, merger_thresh=2.0 ):
+
+    def __init__( self, low_thresh=1, high_thresh=2 ):
         self.low_thresh = low_thresh
         self.high_thresh = high_thresh
-        self.merger_thresh = merger_thresh
+
     def parse( self, current ):
         deriv = np.abs( np.diff( current ) )
         # Find the edges of where a series of points have a derivative greater than a threshold, notated as a 'block'
@@ -606,19 +619,16 @@ class novakker_parser( parser ):
             if np.argmax( segment ) > self.high_thresh: # If the maximum derivative in that block is above a threshold..
                 split_points = np.concatenate( ( split_points, [ tics[i], tics[i+1] ] ) ) # Save the edges of the segment 
                 # Now you have the edges of all transitions saved, and so the states are the current between these transitions
-        tics = merger( threshold = self.merger_thresh ).merge( split_points, current )
         tics = np.concatenate( ( [0], split_points, [ current.shape[0] ] ) )
         return [ Segment( current = current[ tics[i]: tics[i+1] ], start = tics[i] ) for i in xrange( 0, tics.shape[0] - 1, 2 ) ]
 
     def GUI( self ):
         lowThreshDefault = "1e-2"
         highThreshDefault = "1e-1"
-        mergerThreshDefault = "1.0"
 
         grid = Qt.QGridLayout()
         grid.addWidget( Qt.QLabel( "Low-pass Threshold: " ), 0, 0 )
         grid.addWidget( Qt.QLabel( "High-pass Threshold: " ), 1, 0 )
-        grid.addWidget( Qt.QLabel( "Merger Threshold" ), 2, 0 )
 
         self.lowThreshInput = Qt.QLineEdit()
         self.lowThreshInput.setText( lowThreshDefault )
@@ -626,33 +636,11 @@ class novakker_parser( parser ):
         self.highThreshInput = Qt.QLineEdit()
         self.highThreshInput.setText( highThreshDefault )
         self.highThreshInput.setToolTip( "The higher threshold, of which the maximum must be abov." )
-        self.mergerThreshInput = Qt.QLineEdit()
-        self.mergerThreshInput.setText( mergerThreshDefault )
-        self.mergerThreshInput.setToolTip( "T-score that adjacent states must be away to prevent merger." )
 
         grid.addWidget( self.lowThreshInput, 0, 1 )
         grid.addWidget( self.highThreshInput, 1, 1 )
-        grid.addWidget( self.mergerThreshInput, 2, 1 )
         return grid
+
     def set_params( self ):
         self.low_thresh = float( self.lowThreshInput.text() )
         self.high_thresh = float( self.highThreshInput.text() )
-        self.merger_thresh = float( self.mergerThreshInput.text() )
-
-class merger( object ):
-    def __init__( self, threshold ):
-        self.threshold = threshold
-    def merge( self, tics, current ):
-        badtics = []
-        for i in xrange( 3, len( tics ) - 3, 2 ):
-            last_state = current[ tics[i-2] : tics[i-1] ]
-            next_state = current[ tics[i+2] : tics[i+3] ]
-            curr_state = current[ tics[i]   : tics[i+1] ]
-            u = np.abs( np.mean( last_state ) - np.mean( curr_state ) ) / np.sqrt( np.std( last_state ) * np.std( curr_state ) )
-            v = np.abs( np.mean( next_state ) - np.mean( curr_state ) ) / np.sqrt( np.std( next_state ) * np.std( curr_state ) )
-            if v <= self.threshold:
-                badtics = np.concatenate( ( badtics, [i+1, i+2] ) )
-            if u <= self.threshold:
-                badtics = np.concatenate( ( badtics, [i-1, i] ) )
-        tics = np.delete( tics, badtics )
-        return tics 

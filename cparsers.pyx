@@ -30,7 +30,12 @@ cdef inline double mean_c( int start, int end, double [:] c ):
 # Calculate the variance of a segment of current
 @cython.boundscheck(False)
 cdef inline double var_c( int start, int end, double [:] c, double [:] c2 ):
-	return 0 if start == end else (c2[end-1]/end - (c[end-1]/end)**2) if start == 0 else ((c2[end-1]-c2[start-1])/(end-start) - ((c[end-1]-c[start-1])/(end-start))**2)
+	if start == end:
+		return 0
+	if start == 0:
+		return c2[end-1]/end - (c[end-1]/end) ** 2
+	return (c2[end-1]-c2[start-1])/(end-start) - \
+		((c[end-1]-c[start-1])/(end-start))**2
 
 def pairwise(iterable):
 	a, b = tee(iterable)
@@ -47,11 +52,42 @@ cdef class FastStatSplit:
 	cdef double min_gain_per_sample
 	cdef double [:] c, c2
 
-	def __init__( self, min_width=1000, max_width=1000000, window_width=10000, min_gain_per_sample=0.05 ):
+	def __init__( self, min_width=1000, max_width=1000000, window_width=10000,
+		min_gain_per_sample=None, oversegmentation_rate=0.01,
+		prior_segments_per_second=10., sampling_freq=1e-4 ):
+
 		self.min_width = min_width
 		self.max_width = max_width
 		self.window_width = window_width
-		self.min_gain_per_sample = min_gain_per_sample
+
+		# Now set min_gain appropriately, either using the old method or
+		# by calculating a new one in a Bayesian manner as described here:
+		# http://gasstationwithoutpumps.wordpress.com/2014/02/01/more-on-
+		# segmenting-noisy-signals/
+
+		if min_gain_per_sample:
+			# Use old method for setting gain (DEPRECATED)
+			self.min_gain_per_sample = min_gain_per_sample
+
+		else:
+			# Segments per sample
+			seg_per_sample = 1. * prior_segments_per_second / sampling_freq
+
+			# Segments per second
+			seg_per_sec = 1. * prior_segments_per_second
+
+			# Shorten the name
+			over = oversegmentation_rate
+			
+			# Calculate the false positive rate per sample
+			fs = over * seg_per_sec
+
+			# Set the gain threshold in a Bayesian manner
+			self.min_gain_per_sample = -2 * log( seg_per_sec ) - log( over ) + 2 * log( fs )
+
+		# Convert from sigma to variance, since this is in log space multiply
+		# by two instead of square.
+		self.min_gain_per_sample *= 2
 
 	def parse( self, current ):
 		'''

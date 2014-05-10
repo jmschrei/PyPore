@@ -12,63 +12,26 @@ that HMM.
 '''
 
 import numpy as np
-import pyximport
-pyximport.install( setup_args={'include_dirs':np.get_include()})
 from yahmm import *
 
-def Phi29ProfileHMMOld( distributions, name="Phi29 Profile HMM", low=0, high=50 ):
+class HMMBoard( Model ):
 	"""
-	Build a profile HMM based on a list of distributions. Includes:
-		* Short backslips
+	A HMM circuit board. Define the number of lanes in the circuit, with each
+	lane having a start and end silent state.
 	"""
 
-	model = Model( name="{}-{}".format( name, len(distributions) ) )
+	def __init__( self, n, name=None ):
+		super( HMMBoard, self ).__init__( name="Board {}".format( name ) )
 
-	insert_distribution = UniformDistribution( low, high )
-	last_match = model.start
-	last_insert = State( insert_distribution, name="I0" )
-	last_delete, last_sb = None, None
+		for i in xrange( 1,n+1 ):
+			start = State( None, name="b{}s{}".format(name, i) )
+			end = State( None, name="b{}e{}".format(name, i) )
 
-	model.add_transition( model.start, last_insert, 0.02 )
-	model.add_transition( last_insert, last_insert, 0.70 )
+			setattr( self, "s{}".format( i ), start )
+			setattr( self, "e{}".format( i ), end )
 
-	for i, distribution in enumerate( distributions ):
-		match = State( distribution, name="M"+str(i+1), color=['r', 'y', 'g', 'm', 'b', '0.75', '0.50', '0.25', 'r', 'y', 'g' ][i] ) 
-		insert = State( insert_distribution, name="I"+str(i+1) )
-		delete = State( None, name="D"+str(i+1) )
-		short_backslip = State( None, name="S"+str(i+1) ) if i >= 1 else None
-
-		model.add_transition( last_match, match, 0.60 if last_sb is None else 0.55 if not last_match.is_silent() else 0.90 )
-		model.add_transition( match, match, 0.30 )
-		model.add_transition( last_match, delete, 0.08 if last_sb is None else 0.03 )
-		model.add_transition( match, insert, 0.02 )
-
-		model.add_transition( insert, insert, 0.70 )
-		model.add_transition( last_insert, delete, 0.10 )
-		model.add_transition( last_insert, match, 0.20 )
-
-		model.add_transition( delete, insert, 0.10 )
-
-		if short_backslip is not None:
-			model.add_transition( match, short_backslip, 0.10 )
-			model.add_transition( short_backslip, last_match, 0.95 if last_sb is not None else 1.00 )
-
-			if last_sb is not None:
-				model.add_transition( short_backslip, last_sb, 0.05 )
-
-		if last_delete is not None:
-			model.add_transition( last_delete, match, 0.70 )
-			model.add_transition( last_delete, delete, 0.20 )
-
-		last_match, last_insert, last_delete = match, insert, delete
-		last_sb = short_backslip
-
-	model.add_transition( last_delete, model.end, 0.95 )
-	model.add_transition( last_insert, model.end, 0.70 )
-	model.add_transition( last_match, model.end, 0.50 )
-
-	model.bake()
-	return model
+			self.add_state( start )
+			self.add_state( end )
 
 def Phi29ProfileHMM( distributions, name="Phi29 Profile HMM",low=0, high=90, 
 	sb_length=1 ):
@@ -164,8 +127,9 @@ def Phi29ProfileHMMU( distributions, name="Phi29 Profile HMM",low=0, high=90,
 	"""
 	Generates a profile HMM for Phi29 specific data. Includes:
 		* Short backslips
-		* Oversegmentation handling via mixture model
+		* Oversegmentation handling via more complicated match state
 		* Repeat backslip handling
+		* Undersegmentation handling via mixture model
 	"""
 
 	def match_model( distribution, name ):
@@ -238,7 +202,7 @@ def Phi29ProfileHMMU( distributions, name="Phi29 Profile HMM",low=0, high=90,
 					blend_std = ( a_std + b_std ) / 2
 					blend_match = NormalDistribution( blend_mean, blend_std )
 
-			blend_state = State( blend_match, name="U{}".format( i ) )
+			blend_state = State( blend_match, name="U-}".format( i ) )
 
 			model.add_transition( last_last_match.end if not isinstance( last_last_match, State ) 
 				else last_last_match, blend_state, 0.05 )

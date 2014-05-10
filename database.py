@@ -1,99 +1,242 @@
-#!/usr/bin/env python
-# Contact: Jacob Schreiber
-#          jacobtribe@soe.ucsc.com
 # database.py
+# Contact: Jacob Schreiber
+#          jmschreiber91@gmail.com
 
 '''
-This module focuses on the various ways to read and write to databases used to store information. It is designed to be able
-to connect to either a SQL database, a google docs spreadsheet, or an excel spreadsheet, to treat like a database. It can
-either read from or write to these databases, from shared read or write methods. A Factory class will handle the production
-of the appropriate interface. This module uses a pandas dataframe as an intermediary for all data storage efforts. 
+This module contains connectors between google and SQL databases.
+Currently only read is supported for Google spreadsheets, while
+everything is supported for the SQL databases. SQL use case here.
+
+>>> db = Database( db="cheeses", user="jim", password="1hGaj29Kajh", 
+        host="127.0.0.1")
+>>> db.execute( "SELECT * FROM cheese_list" )
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ))
+>>> db.execute( "INSERT INTO cheese_list VALUES ('mozarella', 'MOZ')" )
+>>> db.execute( "SELECT * FROM cheese_list" )
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ),
+    ('mozarella', 'MOZ'))
+>>> db.execute( "DELETE FROM cheese_list WHERE name LIKE '%%'" )
+>>> db.execute( "SELECT * FROM cheese_list" )
+()
+
+You can also get tables, which allow you to have an OO interface to that specific
+table. Assuming that the previous commands did not occur, you can do the following:
+
+>>> table = db.get_table( "cheese_list" )
+>>> table.column_names
+[ 'name', 'tag' ]
+>>> table.column_types
+[ 'varchar', 'varchar' ]
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ))
+>>> table.read( columns=["name"])
+(( 'cheddar' ), ( 'american' ), ( 'gruye' ))
+>>> table.read( columns=["name"], values=["am%"])
+(( 'american' ))
+>>> table.insert( values=('mozarella', 'MOZ') )
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ),
+    ('mozarella', 'MOZ'))
+>>> table.delete( columns=["name"], values=["mozarella"] )
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ))
+>>> table.insert( values=('MOZ', 'mozarella'))
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ),
+    ('MOZ', 'mozarella'))
+>>> table.delete( columns=["name"], values=["mozarella"] )
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ),
+    ('MOZ', 'mozarella'))
+>>> table.delete( columns=["name"], values=["MOZ"] )
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ))
+>>> table.insert( columns=["tag", "name"], values=["MOZ", "mozarella"])
+>>> table.read()
+(( 'cheddar', 'CHE' ), ( 'american', 'AME', ), ( 'gruye', 'GRU' ),
+    ('mozarella', 'MOZ'))
 '''
-import numpy as np
-import collections
 
-SQL_TYPES = [ 'mysql', 'postgresql', 'sqlite' ]
-TEXT_TABLE_TYPES = [ 'excel', 'text', 'csv' ]
-GOOGLE_SPREADSHEET_TYPES = [ 'google' ]
+import MySQLdb
+import itertools as it
 
-class GoogleSpreadsheetInterface( object ):
+class Database( object ):
     '''
-    This is a wrapper for the gdata module, while allows for connections to google spreadsheets. The read
-    method will read all of the data from a given sheet in a given spreadsheet, and the write method will
-    write a pandas dataframe to the google spreadsheet, if it exists. It has to be premade.
-
-    Requires: gdata, pandas
+    Represents a SQL database. 
     '''
-    def __init__( self, email = None, password = None, source = None, title = None, key = None, sheet = 1 ):
-        import gdata.spreadsheet.service as gdata
-        self.client    =  gdata.SpreadsheetsService()
-        self.client.email     =  email
-        self.client.password  =  password
-        self.client.source    =  source
-        self.client.ProgrammaticLogin()
-        self.key   = key
-        self.title = title
-        self.sheet = sheet
-        q = gdata.DocumentQuery()
-        q['title'] = self.title
-        q['title-exact'] = 'true'
-        feed = self.client.GetSpreadsheetsFeed( query = q )
-        spreadsheet_id = feed.entry[0].id.text.rsplit("/", 1)[1]
-        feed = self.client.GetWorksheetsFeed( spreadsheet_id )
-        worksheet_id = feed.entry[ self.sheet ].id.text.rsplit("/", 1)[1]
-        self.data = self.client.GetListFeed( spreadsheet_id, worksheet_id ).entry
+
+    def __init__( self, db, user, password, host ):
+        '''
+        Take in the credentials for the server and connect to it, connecting
+        to a specific database on the server.
+        '''
+
+        self.db = MySQLdb.connect( host, user, password, db )
+        self.cursor = self.db.cursor()
+
+    def execute( self, statement ):
+        '''
+        Allows the user to execute a specific SQL command. If an error is
+        raised, raise an error.
+        '''
+
+        self.cursor.execute( statement )
+        self.db.commit()
+        return self.cursor.fetchall()
+
+    def get_table( self, table ):
+        '''
+        Make a table object for a certain table.
+        '''
+
+        return Table( self, table )
+
+
+    def read_table( self, table, columns=None, values=None ):
+        '''
+        A wrapper allowing you to read a table.
+        '''
+
+        table = self.get_table( table )
+        return table.read( columns=columns, values=values ) 
+
+class Table( object ):
+    '''
+    Represents a table in the database. Allows you to query that table directly
+    instead of looking at the database level.
+    '''
+
+    def __init__( self, db, name ):
+        '''
+        Store the name. We can't actually 'login' to a table, to we'll just
+        only call from that table in the future.
+        '''
+        self.db = db
+        self.name = name
+
+    @property
+    def columns( self ):
+        return self.db.execute( "SHOW COLUMNS FROM {}".format( self.name ) )
+
+    @property
+    def column_type_dict( self ):
+        return { key: value for key, value, _, _, _, _ in self.columns }
+
+    @property
+    def column_names( self ):
+        return map( lambda x: x[0], self.columns )
+
+    @property
+    def column_types( self ):
+        return map( lambda x: x[1], self.columns )
+
+    def read( self, columns=None, values=None ):
+        '''
+        Read certain columns from the table, or all by default.
+        '''
+
+        query = "SELECT {} FROM {}".format( 
+            ','.join( columns ) if columns else '*', self.name )
+        if values:
+            query += " WHERE {}".format( self._build_clauses( values, columns ) )
+
+        return self.db.execute( query )
+
+    def insert( self, values, columns=None ):
+        '''
+        Allows you to insert one row into the database. Assume the ordering
+        is as specified in the database unless columns are specified, then
+        use that ordering.
+        '''
+
+        self.db.execute( "INSERT INTO {} {} VALUES ({})".format(
+            self.name, "({})".format( ','.join( columns ) ) if columns else "",
+            ",".join( "'{}'".format( str(v) ) for v in values  ) )  )
+
+    def delete( self, entry, columns=None ):
+        '''
+        Allows you to delete anything matching this entry.
+        '''
+
+        self.db.execute( "DELETE FROM {} WHERE {}".format(
+            self.name, self._build_clauses( entry, columns ) ) )
+
+    def _build_clauses( self, values, columns=None ):
+        '''
+        A private function which will take a tuple of values, ordered according
+        to the column order in the database, and build an appropriate set of
+        clauses including "IS NULL", "=", "LIKE", and quotations as appropriate.
+        '''
+
+        # If columns are provided, they may be looking fur a custom ordering
+        # of values, so use that. Else, use the natural ordering
+        columns = columns or self.column_names
+        column_type_dict = self.column_type_dict
+
+        # Store the clauses for later use.
+        clauses = []
+
+        # Iterate through the column-value pairs, assuming that if they gave
+        # a column and not a value that they don't care what that value is.
+        for column, value in it.izip_longest( columns, values ):
+            column_type = self.column_type_dict[ column ]
+
+            # If the entry is None, they don't care what it is and
+            # thus use a wildcard
+            if value is None:
+                value = '*'
+
+            # Remove any extra white space that may be there
+            value = value.strip()
+
+            # SQL NULL is the same as the string None, not the datatype None
+            if value == "None": 
+                clauses.append( "{} IS NULL".format( column ) )
+
+            # If the cell type is a varchar..
+            elif 'varchar' in column_type:
+                if value[-1] != '*':  
+                    # If they are not looking for a wild card, look for exact match  
+                    clauses.append( "{} = '{}'".format( column, value ) )
+                else:
+                    # Otherwise, allow for wild card
+                    clauses.append( "{} LIKE '%{}%'".format(column, value[:-1]))
+            elif 'float' in column_type or 'int' in column_type:
+                clauses.append( "{} = {}".format( column, value ) )
+
+        return ' AND '.join( clauses ) or None
+
+class GoogleSpreadsheet( object ):
+    """
+    Wrapper for gspread to connect to a google spreadsheet and read it easily.
+    It acts as a generator, so use is as follows:
+
+    gs = GoogleSpreadsheet( email, password, title )
+    for row in gs:
+        print row
+
+    table = [ row for row in gs ]
+    """
+
+    def __init__( self, email, password, title, sheet="sheet1" ):
+        """
+        Connect to the database and open it.
+        """
+
+        import gspread
+        self.gs = gspread.login( email, password )
+        self.ws = self.gs.open( title ).worksheet( sheet )
 
     def read( self ):
-        '''
-        Read all of the information from a given sheet on a given spreadsheet. It will return this as a
-        list of tuples, ordered according to the keys in the gspreadsheet. 
-        '''
-        return [ tuple([ row.custom[key].text for key in row.custom ]) for row in self.data ]
+        """
+        Return the spreadsheet as a list of lists.
+        """
 
-    def write( self, dataframe ):
-        '''
-        Takes in a pandas dataframe, and writes it to the google spreadsheet. This spreadsheet must already
-        exist. Currently not supported.
-        '''
-        pass
-
-class TextInterface( object ):
-    '''
-    This allows connection to a text document, allowing any deliniation. 
-    '''
-    def __init__( self, file ):
-        self.file = file
-    def read( self, seperator=" " ):
-        '''
-        Read in a text document to a list of tuples. Seperator assumed if csv or tsv, but otherwise
-        needs to be provided if not space-seperated. 
-        '''
-        with open( self.file, 'r' ) as infile:
-            if self.file.endswith( ".csv" ):
-                seperator = ","
-            elif self.file.endswith( ".tsv" ):
-                seperator = "\t"
-            return [ tuple( line.strip("\r\n\t").split(seperator)) for line in infile ] 
-
-    def write( self, data, seperator=" " ):
-        '''
-        Writes a series of data, in order, to the document. This will override any data in the
-        document.
-        '''
-        assert hasattr( data, "__iter__" )
-        with open( self.file, 'w' ) as outfile:
-            if self.file.endswith( ".csv" ):
-                seperator = ","
-            elif self.file.endswith( ".tsv" ):
-                seperator = "\t"
-            if type(data[0] == str):
-                outfile.write( data )
-            else:
-                outfile.write( "\n".join( seperator.join( str(i) for i in entry ) for entry in data ) )
+        return self.ws.get_all_values()
 
 class MySQLDatabaseInterface( object ):
     '''
-    To use mySQL servers, must download the apporpriate servers. 
+    To use mySQL servers, must download the apporpriate servers. DEPRICATED.
     '''
     def __init__( self, db, user = None, password = None, host = None ):
         import MySQLdb
@@ -108,7 +251,8 @@ class MySQLDatabaseInterface( object ):
         try:
             self.cursor.execute( statement )
         except:
-            raise DatabaseError( "MySQL Error: Unable to execute statement '{}'".format(statement) )
+            raise DatabaseError( "MySQL Error: Unable to execute statement \
+                '{}'".format(statement) )
         self.db.commit()
 
     def read( self, statement ):
@@ -116,15 +260,18 @@ class MySQLDatabaseInterface( object ):
             self.cursor.execute( statement )
             return self.cursor.fetchall()
         except:
-            raise DatabaseError( "MySQL Error: Unable to execute statement '{}'".format(statement) )
+            raise DatabaseError( "MySQL Error: Unable to execute statement \
+                '{}'".format(statement) )
 
     def insert( self, table, data ):
         try:
             for row in data:
-                self.cursor.execute( 'INSERT INTO {table} VALUES ( {vals} )'.format( table = table, vals = self._build_insert( row ) ) )
+                self.cursor.execute( 'INSERT INTO {} VALUES ({})'.format( 
+                    table, self._build_insert( row ) ) )
             self.db.commit()
         except:
-            raise DatabaseError( "MySQL Error: Unable to add row ({row}) to table ({table})".format( row=row, table=table ) )
+            raise DatabaseError( "MySQL Error: Unable to add row ({}) \
+                to table ({})".format(row, table ) )
 
     def _build_insert( self, tuple ):
         return ','.join( [ '"{}"'.format( str(item).replace('"', '""').replace( "\\", "\\\\") ) 
@@ -148,28 +295,3 @@ class DatabaseError( Exception ):
     def __str__( self ):
         return repr( self.error ) 
 
-def DatabaseFactory( db_type, **kwargs ):
-    '''
-    Returns a database connection to the appropriate type of database, all of which have at least a read() and write() method.
-    Arguments for the various types are:
-
-    Google Doc
-        title: Name of the spreadsheet to open your google drive
-        email: Account to use to log in
-        password: Password for that account 
-        source: String describing where the query is coming from
-        key: String present in the url of the spreadsheet of interest, after "/ccc?key=" until "#gid" in the url
-    Text
-        file: Name of the text document to use
-    mysql
-        db: Name of the database to use
-        user: User name to connect with
-        password: Password for this user
-        host: Where the database is located 
-    '''
-    if db_type.lower() in GOOGLE_SPREADSHEET_TYPES:
-        return GoogleSpreadsheetInterface( title = title, email = email, password = password, source = source, key = key, sheet = sheet )
-    if db_type.lower() in TEXT_TABLE_TYPES:
-        return TextInterface( file = file )
-    if db_type.lower() == 'mysql':
-        return MySQLDatabaseInterface( db = db, user = user, password = password, host = host )

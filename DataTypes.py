@@ -17,17 +17,17 @@ for event in file.events:
     event.parse( parser=SpeedyStatSplit() )
 
 
-Experiment(): A container for several files run in a single experiment. Calling the parse method
+Experiment: A container for several files run in a single experiment. Calling the parse method
               on an experiment will call the parse method of all files in it.
 
-Sample(): A container for events which have all been classified as a single type. Only useful in 
+Sample: A container for events which have all been classified as a single type. Only useful in 
           experiments where multiple types of events are useful to be stored, such as an experiment
           with multiple substrates.
 
-File(): A container which holds the raw current in a file. It is given the name of a file, and will
+File: A container which holds the raw current in a file. It is given the name of a file, and will
         read it, pull the ionic current, and store it to the object.
 
-Event(): A container for both the ionic current of a given event, and metadata, including a list of
+Event: A container for both the ionic current of a given event, and metadata, including a list of
          segments its parse method is called. 
 '''
 
@@ -44,6 +44,7 @@ import json
 import time
 from itertools import chain, izip, tee, combinations
 import itertools as it
+import re
 
 class Event( Segment ):
     '''
@@ -182,15 +183,22 @@ class Event( Segment ):
                 # to indicate state type, then an integer, then parse using that.
                 # Ex: U1, U15, I17, M201, M2...
                 n = float( hmm.name.split('-')[1] )-1
-                hmm_color_cycle = [ 'r' if state.name[0] == 'U' else 'k' if \
-                    state.name[0] == 'I' else cm( (float( state.name[1:])-1 ) / n ) \
-                    for i, state in hmm_seq ]
+                hmm_color_cycle = []
+
+                for i, state in hmm_seq:
+                    if state.name[0] == 'U':
+                        hmm_color_cycle.append( 'r' )
+                    elif state.name[0] == 'I':
+                        hmm_color_cycle.append( 'k' )
+                    else:
+                        idx = float( re.sub( "[^0-9]", "", state.name ) ) / n
+                        hmm_color_cycle.append( cm( idx ) )
+
             except:
                 # If using any other naming scheme, assign a color from the colormap
                 # to each state without any ordering, since none was specified.
                 states = { hmm.states[i]: i for i in xrange( len(hmm.states) ) }
                 hmm_color_cycle = [ cm( states[state] ) for i, state in hmm_seq ]
-                print hmm_color_cycle
 
         if 'color' in kwargs.keys(): # If the user has specified a scheme..
             color_arg = kwargs['color'] # Pull out the coloring scheme..
