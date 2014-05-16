@@ -70,7 +70,7 @@ cdef class FastStatSplit:
 			self.max_gain = min_gain_per_sample * self.window_width
 
 		else:
-			# Segments per sample
+			# Segments per second
 			seg_per_sec = 1. * prior_segments_per_second
 			
 			# Set the gain threshold in a Bayesian manner
