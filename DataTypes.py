@@ -261,7 +261,7 @@ class Event( Segment ):
                     plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
                     plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
                 else:
-                    plt.plot( np.arange(0, segment.duration, 1./self.file.second)+segment.start, 
+                    plt.plot( np.arange(0, len( segment.current ) )/self.file.second +segment.start, 
                         segment.current, color=c, label=l, **kwargs )
 
         if len(labels) > 0:
@@ -383,6 +383,7 @@ class File( Segment ):
         which returns a tuple corresponding to the 
         self.start = startg to the start of each event, and the ionic current in them. 
         '''
+        
         self.events = [ Event( current=seg.current, start=seg.start, file=self ) 
             for seg in parser.parse( self.current ) ]
         self.event_parser = parser
@@ -390,12 +391,20 @@ class File( Segment ):
         if delete_current:    # Deletes the current array to save significant amounts of space.
             del self.current  # Events hold a hard copy of a smaller array of current. 
 
+    def close( self ):
+        '''
+        Close the file, deleting all data associated with it. A wrapper for the delete function.
+        '''
+
+        self.delete()
+
     def delete( self ):
         '''
         Delete the file, and everything that is a part of it, including the ionic current stored
         to it, other properties, and all events. Calls delete on all events to remove them and all
         underlying data. 
         '''
+        
         with ignored( AttributeError ):
             del self.current
 
@@ -411,6 +420,7 @@ class File( Segment ):
         '''
         Allows you to plot a file, optionally coloring the events in a file.
         '''
+        
         step = 1./self.second
 
         # Allows you to only plot a certain portion of the file
@@ -456,6 +466,7 @@ class File( Segment ):
         Remove the ionic current stored for this file, and do the same for all underlying
         structures in order to remove all references to that list. 
         '''
+        
         with ignored( AttributeError ):
             del self.current
 
@@ -469,6 +480,7 @@ class File( Segment ):
         Return a dictionary of the important data that underlies this file. This is done with the
         intention of producing a json from it. 
         '''
+        
         keys = [ 'filename', 'n', 'event_parser', 'mean', 'std', 'duration', 'start', 'end', 'events' ]
         d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
         d['name'] = self.__class__.__name__
@@ -479,6 +491,7 @@ class File( Segment ):
         Return a json (in the form of a string) that represents the file, and allows for
         reconstruction of the instance from, using cls.from_json. 
         '''
+        
         d = self.to_dict()
 
         devents = []
@@ -548,6 +561,7 @@ class File( Segment ):
         Loads the cache for the file, if this exists. Can either provide the AnalysisID to unambiguously
         know which analysis to use, or the filename if you want the most recent analysis done on that file.
         '''
+        
         db = MySQLDatabaseInterface(db=database, host=host, password=password, user=user)
 
         keys = ( "ID", "Filename", "EventDetector", "EventDetectorParams",
@@ -599,6 +613,7 @@ class File( Segment ):
         table. The split points are stored de facto due to the start and end parameters in the events
         and segments, and so this segmentation can be reloaded using from_database.
         '''
+        
         db = MySQLDatabaseInterface(db=database, host=host, password=password, user=user)
 
         event_parser_name = self.event_parser.__class__.__name__

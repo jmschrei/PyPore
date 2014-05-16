@@ -49,12 +49,12 @@ cdef class FastStatSplit:
 	'''
 
 	cdef int min_width, max_width, window_width
-	cdef double min_gain_per_sample
+	cdef double max_gain
 	cdef double [:] c, c2
 
-	def __init__( self, min_width=1000, max_width=1000000, window_width=10000,
-		min_gain_per_sample=None, oversegmentation_rate=0.01,
-		prior_segments_per_second=10., sampling_freq=1e-4 ):
+	def __init__( self, min_width=100, max_width=1000000, window_width=10000,
+		min_gain_per_sample=None, oversegmentation_rate=.01,
+		prior_segments_per_second=10., sampling_freq=1e5 ):
 
 		self.min_width = min_width
 		self.max_width = max_width
@@ -67,27 +67,20 @@ cdef class FastStatSplit:
 
 		if min_gain_per_sample:
 			# Use old method for setting gain (DEPRECATED)
-			self.min_gain_per_sample = min_gain_per_sample
+			self.max_gain = min_gain_per_sample * self.window_width
 
 		else:
 			# Segments per sample
-			seg_per_sample = 1. * prior_segments_per_second / sampling_freq
-
-			# Segments per second
 			seg_per_sec = 1. * prior_segments_per_second
-
-			# Shorten the name
-			over = oversegmentation_rate
 			
-			# Calculate the false positive rate per sample
-			fs = over * seg_per_sec
-
 			# Set the gain threshold in a Bayesian manner
-			self.min_gain_per_sample = -2 * log( seg_per_sec ) - log( over ) + 2 * log( fs )
+			self.max_gain = -2 * log( seg_per_sec ) - \
+				log( oversegmentation_rate ) + 2 * log( sampling_freq )
 
 		# Convert from sigma to variance, since this is in log space multiply
 		# by two instead of square.
-		self.min_gain_per_sample *= 2
+		self.max_gain *= 2
+		print "DEBUG: max_gain = ", self.max_gain
 
 	def parse( self, current ):
 		'''
@@ -107,6 +100,43 @@ cdef class FastStatSplit:
 
 		return segments
 
+	def best_single_split( self, current ):
+		'''
+		Wrapper for a single call to _best_single_split. It will find the
+		single best split in a series of current, and return the index of
+		that split. Returns a tuple of ( gain, index ) where gain is the
+		gain in variance by splitting there, and index is the index at which
+		the split should occur in the current array. 
+		'''
+
+		self.c = np.cumsum( current )
+		self.c2 = np.cumsum( np.multiply( current, current ) )
+
+		return self._best_single_split()
+
+	cdef tuple _best_single_split( self ):
+		'''
+		A slghtly modification of _best_split_stepwise, ensuring that the
+		single best split is returned instead of only ones which meet a
+		threshold.
+		'''
+
+		cdef int start = 0, end = len( self.c ) - 1, i, x = -1
+		cdef double var_summed, low_var_summed, high_var_summed, gain
+		cdef double max_gain = 0.
+
+		var_summed = end * log( var_c( 0, end, self.c, self.c2))
+		
+		for i in xrange( 2, end-2):
+			low_var_summed = i * log( var_c( 0, i, self.c, self.c2 ) )
+			high_var_summed = ( end-i )  * log( var_c( i, end, self.c, self.c2 ) )
+			gain = var_summed-( low_var_summed+high_var_summed )
+			if gain > max_gain:
+				max_gain = gain
+				x = i
+
+		return (max_gain, x)
+
 	@cython.boundscheck(False)
 	cdef int _best_split_stepwise( self, int start, int end ):
 		'''
@@ -118,13 +148,13 @@ cdef class FastStatSplit:
 		if end-start <= 2*self.min_width:
 			return -1 
 		cdef double var_summed = (end - start) * log( var_c(start, end, self.c, self.c2) )
-		cdef double max_gain = self.min_gain_per_sample * self.window_width
+		cdef double max_gain = self.max_gain
 		cdef int i, x = -1
 		cdef double low_var_summed, high_var_summed, gain
 
 		for i in xrange( start+self.min_width, end+1-self.min_width ):
 			low_var_summed = ( i-start ) * log( var_c( start, i, self.c, self.c2 ) )
-			high_var_summed = ( end-i )  * log( var_c( i, end, self.c, self.c2 ) )
+			high_var_summed = ( end-i ) * log( var_c( i, end, self.c, self.c2 ) )
 			gain = var_summed-( low_var_summed+high_var_summed )
 			if gain > max_gain:
 				max_gain = gain

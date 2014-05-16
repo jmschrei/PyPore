@@ -505,21 +505,27 @@ class StatSplit( parser ):
 class SpeedyStatSplit( parser ):
     def __init__( self, min_width=100, max_width=1000000, window_width=10000, 
         min_gain_per_sample=None, oversegmentation_rate=0.01,
-        prior_segments_per_second=10., sampling_freq=1.e4 ):
+        prior_segments_per_second=10., sampling_freq=1e5 ):
 
         self.min_width = min_width
         self.max_width = max_width
         self.min_gain_per_sample = min_gain_per_sample
         self.window_width = window_width
-        self.psps = prior_segments_per_second
-        self.over = oversegmentation_rate
+        self.prior_segments_per_second = prior_segments_per_second
+        self.oversegmentation_rate = oversegmentation_rate
         self.sampling_freq = sampling_freq
 
     def parse( self, current ):
         parser = FastStatSplit( self.min_width, self.max_width, 
-            self.window_width, self.min_gain_per_sample, self.over, self.psps,
-            self.sampling_freq )
+            self.window_width, self.min_gain_per_sample, self.oversegmentation_rate,
+            self.prior_segments_per_second, self.sampling_freq )
         return parser.parse( current )
+
+    def best_single_split( self, current ):
+        parser = FastStatSplit( self.min_width, self.max_width, 
+            self.window_width, self.min_gain_per_sample, self.oversegmentation_rate,
+            self.prior_segments_per_second, self.sampling_freq )
+        return parser.best_single_split( current )
 
     def GUI( self ):
         grid = Qt.QGridLayout()
@@ -552,7 +558,6 @@ class SpeedyStatSplit( parser ):
         except:
             pass
 
-from cparsers import *
 
 #########################################
 # STATE PARSERS 
