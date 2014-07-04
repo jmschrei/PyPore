@@ -119,7 +119,7 @@ class MemoryParse( object):
     def parse( self, current ):
         return [ Segment( current=np.array(current[int(s):int(e)], copy=True),
                           start=s,
-                          duration=(e-s)/100000 ) for s, e in zip(self.starts, self.ends)]
+                          duration=(e-s) ) for s, e in zip(self.starts, self.ends)]
 
 class lambda_event_parser( parser ):
     '''
@@ -130,7 +130,7 @@ class lambda_event_parser( parser ):
     '''
     def __init__( self, threshold=90, rules=None ):
         self.threshold = threshold
-        self.rules = rules or [ lambda event: event.duration > 1,
+        self.rules = rules or [ lambda event: event.duration > 100000,
                                 lambda event: event.min > -0.5,
                                 lambda event: event.max < self.threshold ]
     def _lambda_select( self, events ):
@@ -151,7 +151,7 @@ class lambda_event_parser( parser ):
         del mask
         events = [ Segment(current=np.array(current), copy=True, 
                             start=tics[i], 
-                            duration=current.shape[0]/100000. ) for i, current in enumerate( np.split( current, tics[1:-1]) ) ]
+                            duration=current.shape[0] ) for i, current in enumerate( np.split( current, tics[1:-1]) ) ]
         return [ event for event in self._lambda_select( events ) ]
     
     def GUI( self ):
@@ -295,7 +295,7 @@ class StatSplit( parser ):
             vars = [self._var_c(pair[0],pair[1]) for pair in paired]
             segments = [ Segment( current=current[start:end],
                               start=start,
-                              duration=(end-start)/100000 ) for start,end in paired ]
+                              duration=(end-start) ) for start,end in paired ]
             return segments
 
         lrs = [self._lr(pair[0],pair[1]) for pair in paired]
@@ -303,7 +303,7 @@ class StatSplit( parser ):
         rights = [alpha+beta*e for (alpha,beta,var),(s,e) in izip(lrs,paired)]
         segments = [ Segment( current=current[start:end],
                               start=start,
-                              duration=(end-start)/100000 ) for start,end in paired ]
+                              duration=(end-start) ) for start,end in paired ]
         return segments 
 
     def _mean_c(self, start, end):
@@ -503,27 +503,33 @@ class StatSplit( parser ):
             + self._segment_cumulative(split_at,end)
 
 class SpeedyStatSplit( parser ):
+    '''
+    See cparsers.pyx FastStatSplit for full documentation. This is just a
+    wrapper for the cyton implementation to add a GUI.
+    '''
+
     def __init__( self, min_width=100, max_width=1000000, window_width=10000, 
-        min_gain_per_sample=None, oversegmentation_rate=0.01,
-        prior_segments_per_second=10., sampling_freq=1e5 ):
+        min_gain_per_sample=None, false_positive_rate=0.01,
+        prior_segments_per_second=10., sampling_freq=1e5, cutoff_freq=5000 ):
 
         self.min_width = min_width
         self.max_width = max_width
         self.min_gain_per_sample = min_gain_per_sample
         self.window_width = window_width
         self.prior_segments_per_second = prior_segments_per_second
-        self.oversegmentation_rate = oversegmentation_rate
+        self.false_positive_rate = false_positive_rate
         self.sampling_freq = sampling_freq
+        self.cutoff_freq = cutoff_freq
 
     def parse( self, current ):
         parser = FastStatSplit( self.min_width, self.max_width, 
-            self.window_width, self.min_gain_per_sample, self.oversegmentation_rate,
-            self.prior_segments_per_second, self.sampling_freq )
+            self.window_width, self.min_gain_per_sample, self.false_positive_rate,
+            self.prior_segments_per_second, self.sampling_freq, self.cutoff_freq )
         return parser.parse( current )
 
     def best_single_split( self, current ):
         parser = FastStatSplit( self.min_width, self.max_width, 
-            self.window_width, self.min_gain_per_sample, self.oversegmentation_rate,
+            self.window_width, self.min_gain_per_sample, self.false_positive_rate,
             self.prior_segments_per_second, self.sampling_freq )
         return parser.best_single_split( current )
 

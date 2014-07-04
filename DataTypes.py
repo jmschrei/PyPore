@@ -52,18 +52,23 @@ class Event( Segment ):
     file containing useful data. 
     '''
 
-    def __init__( self, current, start=0, file=None, segments=[], **kwargs ):
+    def __init__( self, current, start=0, second=100000., file=None, segments=[], **kwargs ):
         # If a file is provided, divide the time into seconds appropriately
         if file is not None:
+            second = file.second
             start /= file.second
             duration = len(current) / file.second
 
         # If segments are provided, set an appropriate duration 
-        if len(segments) > 0:
+        elif len(segments) > 0:
             duration = sum( seg.duration for seg in segments )
 
+        else:
+            if 'duration' not in kwargs:
+                duration = len(current) / second
+
         Segment.__init__( self, current, duration=duration, filtered=False, 
-            start=start, segments=segments, sample=None, file=file, **kwargs )            
+            second=second, start=start, segments=segments, sample=None, file=file, **kwargs )            
 
          
     def filter( self, order=1, cutoff=2000. ):
@@ -75,7 +80,7 @@ class Event( Segment ):
         if type(self) != Event:
             raise TypeError( "Cannot filter a metaevent. Must have the current." )
         from scipy import signal
-        nyquist = self.file.second / 2.
+        nyquist = self.second / 2.
         (b, a) = signal.bessel( order, cutoff / nyquist, btype='low', analog=0, output = 'ba' )
         self.current = signal.filtfilt( b, a, self.current )
         self.filtered = True
@@ -96,8 +101,10 @@ class Event( Segment ):
         if type(self) is not Event:
             raise TypeError( "Cannot parse a metaevent. Must have the current." )
 
-        self.segments = np.array( [ Segment( current=segment.current, start=segment.start, 
-            second=self.file.second, event=self ) for segment in parser.parse( self.current ) ] ) 
+        self.segments = np.array( [ Segment( current=segment.current, 
+            start=segment.start / self.second, second=self.second, event=self,
+            duration=len(segment.current) / self.second ) 
+            for segment in parser.parse( self.current ) ] ) 
 
         # If using HMM-Guided Segmentation, run the segments through the HMM
         if hmm:
@@ -108,7 +115,7 @@ class Event( Segment ):
             # Find the viterbi path through the events
             logp, states = self.apply_hmm( hmm )
             
-            second = self.file.second
+            second = self.second
             i, j, n, segments = 0, 0, len(self.segments), []
 
             while i < n-1:
@@ -127,7 +134,7 @@ class Event( Segment ):
                                                       mean=mean,
                                                       std=std,
                                                       event=self,
-                                                      second=self.file.second,
+                                                      second=self.second,
                                                       hidden_state=states[j+1].name ) )
 
                     else:
@@ -136,7 +143,7 @@ class Event( Segment ):
                         segments.append( Segment( start=s,
                                                   current=current,
                                                   event=self,
-                                                  second=self.file.second,
+                                                  second=self.second,
                                                   hidden_state=states[j+1][1].name ) )
                     j = i
                 i += 1
@@ -173,32 +180,43 @@ class Event( Segment ):
         '''
 
         if hmm:
-            cm = plt.get_cmap( cmap )
-            _, hmm_seq = self.apply_hmm( hmm )
-
-            hmm_seq = filter( lambda state: not state[1].is_silent(), hmm_seq )
+            _, hidden_states = self.apply_hmm( hmm )
+            hidden_states = filter( lambda state: not state[1].is_silent(), hidden_states )
             
-            try:
-                # If using the naming scheme of "X..." meaning a single character
-                # to indicate state type, then an integer, then parse using that.
-                # Ex: U1, U15, I17, M201, M2...
-                n = float( hmm.name.split('-')[1] )-1
+            if isinstance( cmap, dict ):
+                # If you pass in a custom coloring scheme, use that.
                 hmm_color_cycle = []
-
-                for i, state in hmm_seq:
-                    if state.name[0] == 'U':
-                        hmm_color_cycle.append( 'r' )
-                    elif state.name[0] == 'I':
-                        hmm_color_cycle.append( 'k' )
+                for _, state in hidden_states:
+                    if state.name in cmap.keys():
+                        hmm_color_cycle.append( cmap[state.name] )
+                    elif 'else' in cmap.keys():
+                        hmm_color_cycle.append( cmap['else'] )
                     else:
-                        idx = float( re.sub( "[^0-9]", "", state.name ) ) / n
-                        hmm_color_cycle.append( cm( idx ) )
+                        hmm_color_cycle.append( 'k' )
+            else:
+                cm = plt.get_cmap( cmap )
 
-            except:
-                # If using any other naming scheme, assign a color from the colormap
-                # to each state without any ordering, since none was specified.
-                states = { hmm.states[i]: i for i in xrange( len(hmm.states) ) }
-                hmm_color_cycle = [ cm( states[state] ) for i, state in hmm_seq ]
+                try:
+                    # If using the naming scheme of "X..." meaning a single character
+                    # to indicate state type, then an integer, then parse using that.
+                    # Ex: U1, U15, I17, M201, M2...
+                    n = float( hmm.name.split('-')[1] )-1
+                    hmm_color_cycle = []
+
+                    for i, state in hidden_states:
+                        if state.name[0] == 'U':
+                            hmm_color_cycle.append( 'r' )
+                        elif state.name[0] == 'I':
+                            hmm_color_cycle.append( 'k' )
+                        else:
+                            idx = float( re.sub( "[^0-9]", "", state.name ) ) / n
+                            hmm_color_cycle.append( cm( idx ) )
+
+                except:
+                    # If using any other naming scheme, assign a color from the colormap
+                    # to each state without any ordering, since none was specified.
+                    states = { hmm.states[i]: i for i in xrange( len(hmm.states) ) }
+                    hmm_color_cycle = [ cm( states[state] ) for i, state in hidden_states ]
 
         if 'color' in kwargs.keys(): # If the user has specified a scheme..
             color_arg = kwargs['color'] # Pull out the coloring scheme..
@@ -212,7 +230,7 @@ class Event( Segment ):
             elif color_arg == 'model': # Color by the models in the HMM 
                 color, labels, i, new_model = [], [], 0, False
                 cycle = [ 'b', 'r', 'c', 'k', 'y', 'm', '0.25', 'g', '0.75' ] 
-                for index, state in hmm_seq:
+                for index, state in hidden_states:
                     if not state.is_silent():
                         color.append( cycle[i%9] )
                         if not new_model:
@@ -238,7 +256,7 @@ class Event( Segment ):
         elif color_arg != 'model':
             labels = []
 
-        if len(color) == 1:
+        if isinstance( color, str ):
             if self.__class__.__name__ == "MetaEvent":
                 x = ( 0, self.duration )
                 y_high = lambda z: self.mean + z * self.std
@@ -248,7 +266,7 @@ class Event( Segment ):
                 plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.30 )
                 plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.15 )
             else:
-                plt.plot( np.arange(0, self.duration, 1./self.file.second), 
+                plt.plot( np.arange(0, len( self.current ) )/self.second, 
                     self.current, color=color, **kwargs )
         else:
             for c, segment, l in it.izip_longest( color, self.segments, labels ):
@@ -261,7 +279,7 @@ class Event( Segment ):
                     plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
                     plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
                 else:
-                    plt.plot( np.arange(0, len( segment.current ) )/self.file.second +segment.start, 
+                    plt.plot( np.arange(0, len( segment.current ) )/self.second + segment.start, 
                         segment.current, color=c, label=l, **kwargs )
 
         if len(labels) > 0:
@@ -418,38 +436,46 @@ class File( Segment ):
     def plot( self, color_events=True, limits=None, event_downsample=5, file_downsample=100,
         file_kwargs={ 'c':'k', 'alpha':0.66 }, event_kwargs={ 'c': 'c', 'alpha':0.66 }, **kwargs ):
         '''
-        Allows you to plot a file, optionally coloring the events in a file.
+        Allows you to plot a file, optionally coloring the events in a file. You may also give a
+        dictionary of settings to color the event by, and dictionary of settings to color the
+        rest of the file by. You may also specify the downsampling for the event and the rest
+        of the file separately, because otherwise it may be too much data to plot.
         '''
         
         step = 1./self.second
+        second = self.second
 
         # Allows you to only plot a certain portion of the file
         limits = limits or ( 0, len( self.current) )
+        start, end = limits
 
-        # Color the events if you want 
+        # If you want to apply special settings to the events and the rest of the file
+        # separately, you need to go through each part and plot it individually.
         if color_events:
-            events = [ (event.start, event.end) for event in self.events \
-                if event.start*self.second > limits[0] and event.end*self.second < limits[1] ]
+            # Pick out all of the events, as opposed to non-event related current
+            # in the file.
+            events = [ event for event in self.events if event.start > start and event.end < end ]
 
+            # If there are no events, just plot using the given settings.
             if len(events) == 0:
-                plt.plot( np.arange( limits[0], limits[1] ), 
-                    self.current[ limits[0]:limits[1] ], **kwargs )
+                plt.plot( np.arange( start*second, end*second ), 
+                    self.current[ start*second:end*second ], **kwargs )
+
             else:
-                current = self.current[ limits[0]:int(events[0][0]*self.second):\
+                current = self.current[ int( start*second ):int( events[0].start*second ):\
                     file_downsample ]
-                plt.plot( np.arange(0, len(current) )*step*file_downsample+limits[0]*step, 
+                plt.plot( np.arange(0, len(current) )*step*file_downsample+start, 
                     current, **file_kwargs ) 
 
-            for i, (start, end) in enumerate( events ):
-                print "derp"
-                si, ei = int(start*self.second), int(end*self.second)
+            for i, event in enumerate( events ):
+                si, ei = int(event.start*second), int(event.end*second)
                 current = self.current[ si:ei:event_downsample ]
-                plt.plot( np.arange(0, len(current) )*step*event_downsample+start, 
+                plt.plot( np.arange(0, len(current) )*step*event_downsample+event.start, 
                     current, **event_kwargs )
 
-                si, ei = ei, limits[1] if i == len(events)-1 else int( events[i+1][0]*self.second )
+                si, ei = ei, int( end*second ) if i == len(events)-1 else int( events[i+1].start*self.second )
                 current = self.current[ si:ei:file_downsample ]
-                plt.plot( np.arange( 0, len(current) )*step*file_downsample+end, 
+                plt.plot( np.arange( 0, len(current) )*step*file_downsample+event.end, 
                     current, **file_kwargs )
 
         else:
@@ -458,8 +484,7 @@ class File( Segment ):
         plt.title( "File {}".format( self.filename ) )
         plt.ylabel( "Current (pA)" )
         plt.xlabel( "Time (s)" )
-        plt.xlim( limits[0]*step, limits[1]*step )
-        plt.show()
+        plt.xlim( start, end )
 
     def to_meta( self ):
         '''
@@ -482,6 +507,8 @@ class File( Segment ):
         '''
         
         keys = [ 'filename', 'n', 'event_parser', 'mean', 'std', 'duration', 'start', 'end', 'events' ]
+        if not hasattr( self, 'end' ) and ( hasattr( self, 'start') and hasattr( self, 'duration') ):
+            setattr( self, 'end', self.start + self.duration )
         d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
         d['name'] = self.__class__.__name__
         return d
@@ -545,7 +572,7 @@ class File( Segment ):
                 event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
 
             event.segments = [ Segment( current=event.current[ int(s_json['start']*file.second) : int(s_json['end']*file.second) ],
-                                        second=file.second, event=event, start=s_json['start']*file.second )
+                                        second=file.second, event=event, start=s_json['start'] )
                                                                 for s_json in _json['segments'] ]
             event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
             event.filtered = _json['filtered']

@@ -34,7 +34,7 @@ class HMMBoard( Model ):
 			self.add_state( end )
 
 def Phi29ProfileHMM( distributions, name="Phi29 Profile HMM",low=0, high=90, 
-	sb_length=1 ):
+	sb_length=1, verbose=True, merge='all' ):
 	"""
 	Generates a profile HMM for Phi29 specific data. Includes:
 		* Short backslips
@@ -119,7 +119,7 @@ def Phi29ProfileHMM( distributions, name="Phi29 Profile HMM",low=0, high=90,
 	model.add_transition( last_delete, model.end, 0.95 )
 	model.add_transition( last_insert, model.end, 0.70 )
 	model.add_transition( last_match.end, model.end, 0.50 )
-	model.bake()
+	model.bake( verbose=verbose, merge=merge )
 	return model
 
 def Phi29ProfileHMMU( distributions, name="Phi29 Profile HMM",low=0, high=90, 
@@ -202,7 +202,7 @@ def Phi29ProfileHMMU( distributions, name="Phi29 Profile HMM",low=0, high=90,
 					blend_std = ( a_std + b_std ) / 2
 					blend_match = NormalDistribution( blend_mean, blend_std )
 
-			blend_state = State( blend_match, name="U-}".format( i ) )
+			blend_state = State( blend_match, name="U-{}".format( i ) )
 
 			model.add_transition( last_last_match.end if not isinstance( last_last_match, State ) 
 				else last_last_match, blend_state, 0.05 )

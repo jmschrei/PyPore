@@ -94,12 +94,6 @@ class Segment( object ):
 				continue
 			setattr( self, key, value )
 
-		if hasattr( self, 'second' ): 
-			if not hasattr( self, 'duration' ):
-				self.duration = self.n / self.second
-			if hasattr( self, 'start' ):
-				self.start = self.start / self.second
-
 	def __repr__( self ):
 		return self.to_json()
 	def __len__( self ):
