@@ -172,7 +172,7 @@ class Event( Segment ):
 
         return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
 
-    def plot( self, hmm=None, cmap="Set1", **kwargs ):
+    def plot( self, hmm=None, cmap="Set1", color_cycle=['r', 'b', '#FF6600', 'g'], **kwargs ):
         '''
         Plot the segments, colored either according to a color cycle, or according to the colors
         associated with the hidden states of a specific hmm passed in. Accepts all arguments that
@@ -222,7 +222,7 @@ class Event( Segment ):
             color_arg = kwargs['color'] # Pull out the coloring scheme..
             
             if color_arg == 'cycle': # Use a 4-color rotating cycle
-                color = [ 'brgc'[i%4] for i in xrange(self.n) ]
+                color = [ color_cycle[i%4] for i in xrange(self.n) ]
 
             elif color_arg == 'hmm': # coloring by HMM hidden state
                 color = hmm_color_cycle
@@ -433,8 +433,9 @@ class File( Segment ):
             event.delete()
         del self
 
-    def plot( self, color_events=True, limits=None, event_downsample=5, file_downsample=100,
-        file_kwargs={ 'c':'k', 'alpha':0.66 }, event_kwargs={ 'c': 'c', 'alpha':0.66 }, **kwargs ):
+    def plot( self, limits=None, color_events=True, event_downsample=5, 
+        file_downsample=100, downsample=10, file_kwargs={ 'c':'k', 'alpha':0.66 }, 
+        event_kwargs={ 'c': 'c', 'alpha':0.66 }, **kwargs ):
         '''
         Allows you to plot a file, optionally coloring the events in a file. You may also give a
         dictionary of settings to color the event by, and dictionary of settings to color the
@@ -479,7 +480,8 @@ class File( Segment ):
                     current, **file_kwargs )
 
         else:
-            plt.plot( np.arange( 0, len(self.current)/self.second ), self.current, **kwargs )
+            current = self.current[ start*second:end*second:downsample ]
+            plt.plot( np.arange( 0, len(current) )*step*downsample+start, current, **kwargs )
 
         plt.title( "File {}".format( self.filename ) )
         plt.ylabel( "Current (pA)" )

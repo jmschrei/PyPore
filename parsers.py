@@ -509,8 +509,8 @@ class SpeedyStatSplit( parser ):
     '''
 
     def __init__( self, min_width=100, max_width=1000000, window_width=10000, 
-        min_gain_per_sample=None, false_positive_rate=0.01,
-        prior_segments_per_second=10., sampling_freq=1e5, cutoff_freq=5000 ):
+        min_gain_per_sample=None, false_positive_rate=None,
+        prior_segments_per_second=None, sampling_freq=1.e5, cutoff_freq=None ):
 
         self.min_width = min_width
         self.max_width = max_width

@@ -23,6 +23,8 @@ class HMMBoard( Model ):
 	def __init__( self, n, name=None ):
 		super( HMMBoard, self ).__init__( name="Board {}".format( name ) )
 
+		self.directions = [ '>' ] * n 
+		self.n = n
 		for i in xrange( 1,n+1 ):
 			start = State( None, name="b{}s{}".format(name, i) )
 			end = State( None, name="b{}e{}".format(name, i) )
@@ -32,6 +34,179 @@ class HMMBoard( Model ):
 
 			self.add_state( start )
 			self.add_state( end )
+
+def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
+	"""
+	Create the HMM using circuit board methodologies.
+	"""
+
+	# Initialize the model, and the list of boards in the model
+	model = Model( name )
+	boards = []
+
+	# For each distribution in the list, add it to the model
+	for i, distribution in enumerate( distributions ):
+		# If this is not the first distribution, then pull the last board to connect to
+		if i > 0:
+			last_board = boards[-1]
+
+		# If the current distribution is a distribution and not a dictionary..
+		if isinstance( distribution, Distribution ):
+			# Build a board for that distribution and add it to the model
+			board = board_func( distribution, name=i, low=low, high=high )
+			model.add_model( board )
+
+			# If this is the first board, there are no boards to connect to
+			if i == 0:
+				boards.append( board )
+				continue
+
+			# If the last board is a single distribution, simply connect to it
+			if isinstance( distributions[i-1], Distribution ):
+				# Add the current board to the list of boards
+				boards.append( board )
+
+				# Iterate across all the ports on the board
+				for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
+					# Get the end port from the last board and the start port from this board
+					end = getattr( last_board, 'e{}'.format( j ) )
+					start = getattr( board, 's{}'.format( j ) )
+
+					# Depending on the direction of that port, connect it in the appropriate
+					# direction.
+					if d == '>':
+						model.add_transition( end, start, 1.00 )
+					elif d == '<':
+						model.add_transition( start, end, 1.00 )
+
+			# If the last distribution was actually a dictionary, then we're remerging from a fork.
+			elif isinstance( distributions[i-1], dict ):
+				# Calculate the number of forks in there
+				n = len( distributions[i-1].keys() )
+
+				# Go through each of the previous boards
+				for last_board in boards[-n:]:
+					for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
+						# Get the appropriate end and start port
+						end = getattr( last_board, 'e{}'.format( j ) )
+						start = getattr( board, 's{}'.format( j ) )
+
+						# Give appropriate transitions given the direction
+						if d == '>':
+							model.add_transition( end, start, 1.00 )
+						elif d == '<':
+							model.add_transition( start, end, 1.00 / n )
+
+				# Add the board to the growing list
+				boards.append( board )
+
+		# If we're currently in a fork..
+		elif isinstance( distribution, dict ):
+			# Calculate the number of paths in this fork
+			n = len( distribution.keys() )
+
+			# For each path in the fork, attach the boards appropriately
+			for key, dist in distribution.items():
+				board = board_func( dist, "{}:{}".format( key, i+1 ), low=low, high=high )
+				boards.append( board )
+				model.add_model( board )
+
+				# If the last position was in a fork as well..
+				if isinstance( distributions[i-1], dict ):
+					last_board = boards[-n]
+
+					# Connect the ports appropriately
+					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
+						end = getattr( last_board, 'e{}'.format( j ) )
+						start = getattr( board, 's{}'.format( j ) )
+
+						if d == '>':
+							model.add_transition( end, start, 1.00 )
+						elif d == '<':
+							model.add_transition( start, end, 1.00 )
+
+				# If the last position was not in a fork, then we need to fork the
+				# transitions appropriately
+				else:
+					# Go through each of the ports and give appropriate transition
+					# probabilities. 
+					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
+						# Get the start and end states
+						end = getattr( last_board, 'e{}'.format( j ) )
+						start = getattr( board, 's{}'.format( j ) )
+
+						# Give a transition in the appropriate direction.
+						if d == '>':
+							model.add_transition( end, start, 1.00 / n )
+						elif d == '<':
+							model.add_transition( start, end, 1.00 )
+
+	board = boards[0]
+	initial_insert = State( UniformDistribution( low, high ), name="I:0" )
+	model.add_state( initial_insert )
+
+	model.add_transition( initial_insert, initial_insert, 0.70 )
+	model.add_transition( initial_insert, board.s1, 0.1 )
+	model.add_transition( initial_insert, board.s2, 0.2 )
+
+	model.add_transition( model.start, initial_insert, 0.02 )
+	model.add_transition( model.start, board.s1, 0.08 )
+	model.add_transition( model.start, board.s2, 0.90 )
+
+	board = boards[-1]
+	model.add_transition( board.e1, model.end, 1.00 )
+	model.add_transition( board.e2, model.end, 1.00 )
+
+	model.bake()
+	return model
+
+def NanoporeGlobalAlignmentModule( distribution, name, low, high ):
+	'''
+	Creates a single board from a distribution. This will create a module which
+	is based off the traditional global sequence alignment hmm which contains
+	inserts, deletes, and matches, but adds a self loop for matches, a loop back
+	to a match from an insert, and a backslip state as well.
+	'''
+
+	# Create the board object
+	board = HMMBoard( 3, name )
+	board.directions = [ '>', '>', '<' ]
+
+	# Create the four states in the module
+	insert = State( UniformDistribution( low, high ), name="I:{}".format( name ) )
+	match = State( distribution, name="M:{}".format( name ) )
+	delete = State( None, name="D:{}".format( name ) )
+	backslip = State( None, name="B:{}".format( name ) )
+
+	# Add transitions between these states.
+	board.add_transition( board.s1, delete, 1.0 )
+	board.add_transition( board.s2, match, 1.0 )
+	board.add_transition( board.e3, backslip, 1.0 )
+
+	# Add transitions from the backslip state 
+	board.add_transition( backslip, match, 0.85 )
+	board.add_transition( backslip, board.s3, 0.15 )
+
+	# Add transitions from the delete state
+	board.add_transition( delete, board.e1, 0.1 )
+	board.add_transition( delete, board.e2, 0.8 )
+	board.add_transition( delete, insert, 0.1 )
+
+	# Add transitions from the match state
+	board.add_transition( match, board.s3, 0.033 )
+	board.add_transition( match, match, 0.4 )
+	board.add_transition( match, board.e2, 0.5 )
+	board.add_transition( match, insert, 0.033 )
+	board.add_transition( match, board.e1, 0.34 )
+
+	# Add transitions from the insert state
+	board.add_transition( insert, insert, 0.50 )
+	board.add_transition( insert, match, 0.20 )
+	board.add_transition( insert, board.e1, 0.05 )
+	board.add_transition( insert, board.e2, 0.25)
+
+	# Return the board
+	return board
 
 def Phi29ProfileHMM( distributions, name="Phi29 Profile HMM",low=0, high=90, 
 	sb_length=1, verbose=True, merge='all' ):

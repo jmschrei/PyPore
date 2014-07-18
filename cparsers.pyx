@@ -53,13 +53,18 @@ cdef class FastStatSplit:
 	cdef double [:] c, c2
 
 	def __init__( self, min_width=100, max_width=1000000, window_width=10000,
-		min_gain_per_sample=None, false_positive_rate=.01,
-		prior_segments_per_second=10., sampling_freq=1e5, cutoff_freq=None ):
+		min_gain_per_sample=None, false_positive_rate=None,
+		prior_segments_per_second=None, sampling_freq=1.e5, cutoff_freq=None ):
 
 		self.min_width = min_width
 		self.max_width = max_width
 		self.window_width = window_width
 		self.sampling_freq = sampling_freq
+
+		if not false_positive_rate:
+			false_positive_rate = sampling_freq
+		if not prior_segments_per_second: 
+			prior_segments_per_second = sampling_freq / 2.
 
 		assert self.max_width >= self.min_width, "Maximum width must be greater\
 			than minimum width."
@@ -82,14 +87,14 @@ cdef class FastStatSplit:
 			# Set the ratio between the cutoff frequency and the Nyquist
 			# frequency.
 			k = cutoff_freq / ( 0.5 * sampling_freq ) if cutoff_freq else 1
-
-			# Convert segments per second to segments per sample.
-			sps = 1. * prior_segments_per_second / sampling_freq
 			
+			# Shorten the name
+			sps = prior_segments_per_second
+
 			# Set the gain threshold in a Bayesian manner
 			self.min_gain = \
-				-log( sps / ( 1. - sps ) ) \
-				-log( false_positive_rate / sampling_freq ) / k 
+				( -log( sps / ( sampling_freq - sps ) ) \
+				  -log( false_positive_rate / sampling_freq ) ) / k 
 
 		# Convert from sigma to variance, since this is in log space multiply
 		# by two instead of square.
