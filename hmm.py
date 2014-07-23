@@ -35,7 +35,7 @@ class HMMBoard( Model ):
 			self.add_state( start )
 			self.add_state( end )
 
-def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
+def ModularProfileModel( board_func, distributions, name, insert ):
 	"""
 	Create the HMM using circuit board methodologies.
 	"""
@@ -53,7 +53,7 @@ def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
 		# If the current distribution is a distribution and not a dictionary..
 		if isinstance( distribution, Distribution ):
 			# Build a board for that distribution and add it to the model
-			board = board_func( distribution, name=i, low=low, high=high )
+			board = board_func( distribution, name=i, insert=insert )
 			model.add_model( board )
 
 			# If this is the first board, there are no boards to connect to
@@ -85,7 +85,7 @@ def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
 				n = len( distributions[i-1].keys() )
 
 				# Go through each of the previous boards
-				for last_board in boards[-n:]:
+				for last_board in boards[-n-1:]:
 					for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
 						# Get the appropriate end and start port
 						end = getattr( last_board, 'e{}'.format( j ) )
@@ -107,13 +107,13 @@ def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
 
 			# For each path in the fork, attach the boards appropriately
 			for key, dist in distribution.items():
-				board = board_func( dist, "{}:{}".format( key, i+1 ), low=low, high=high )
+				board = board_func( dist, "{}:{}".format( key, i+1 ), insert=insert )
 				boards.append( board )
 				model.add_model( board )
 
 				# If the last position was in a fork as well..
 				if isinstance( distributions[i-1], dict ):
-					last_board = boards[-n]
+					last_board = boards[-n-1]
 
 					# Connect the ports appropriately
 					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
@@ -142,7 +142,7 @@ def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
 							model.add_transition( start, end, 1.00 )
 
 	board = boards[0]
-	initial_insert = State( UniformDistribution( low, high ), name="I:0" )
+	initial_insert = State( insert, name="I:0" )
 	model.add_state( initial_insert )
 
 	model.add_transition( initial_insert, initial_insert, 0.70 )
@@ -160,7 +160,7 @@ def ModularProfileModel( board_func, distributions, name, low=0, high=90 ):
 	model.bake()
 	return model
 
-def NanoporeGlobalAlignmentModule( distribution, name, low, high ):
+def NanoporeGlobalAlignmentModule( distribution, name, insert ):
 	'''
 	Creates a single board from a distribution. This will create a module which
 	is based off the traditional global sequence alignment hmm which contains
@@ -173,7 +173,7 @@ def NanoporeGlobalAlignmentModule( distribution, name, low, high ):
 	board.directions = [ '>', '>', '<' ]
 
 	# Create the four states in the module
-	insert = State( UniformDistribution( low, high ), name="I:{}".format( name ) )
+	insert = State( insert, name="I:{}".format( name ) )
 	match = State( distribution, name="M:{}".format( name ) )
 	delete = State( None, name="D:{}".format( name ) )
 	backslip = State( None, name="B:{}".format( name ) )
@@ -207,6 +207,125 @@ def NanoporeGlobalAlignmentModule( distribution, name, low, high ):
 
 	# Return the board
 	return board
+
+def GlobalAlignmentModule( distribution, name, insert ):
+    '''
+    This is the repeating subunit for a typical global sequence alignment HMM.
+    '''
+    
+    # Create the initial board with n ports on either side, in this case 2.
+    board = HMMBoard( 2, name )
+    
+    # Define the three states in the repeating subunit, the match, the insert, and the delete
+    delete = State( None, name="D:{}".format( name ) )
+    insert = State( insert, name="I:{}".format( name ) )
+    match = State( distribution, name="M:{}".format( name ) )
+    
+    # Define the transitions
+    board.add_transition( board.s1, delete, 1.00 )
+    board.add_transition( board.s2, match, 1.00 )
+    
+    board.add_transition( match, board.e2, 0.9 )
+    board.add_transition( match, board.e1, 0.05 )
+    board.add_transition( match, insert, 0.05 )
+    
+    board.add_transition( delete, insert, 0.15 )
+    board.add_transition( delete, board.e1, 0.15 )
+    board.add_transition( delete, board.e2, 0.7 )
+    
+    board.add_transition( insert, insert, 0.7 )
+    board.add_transition( insert, board.e1, 0.15 )
+    board.add_transition( insert, board.e2, 0.15 )
+    
+    # Return the model, unbaked
+    return board
+
+def Phi29GlobalAlignmentModule( distribution, name, insert=UniformDistribution( 0, 90 ) ):
+    """
+    Create a module which represents a full slice of the PSSM. Take in
+    the distribution which should be represented at that position, and
+    create a board with 7 ports on either side.
+    """
+
+    def match_model( distribution, name ):
+        """
+        Build a small match model, allowing for oversegmentation where the
+        distribution representing number of segments is a mixture of two
+        exponentials.
+        """
+
+        model = Model( name=str(name) )
+
+        match = State( distribution, name="M:{}".format( name ) ) # Match without oversegmentation
+        match_os = State( distribution, name="MO:{}".format( name ) ) # Match with oversegmentation
+
+        model.add_states( [ match, match_os ] )
+
+        model.add_transition( model.start, match, 0.95 )
+        model.add_transition( model.start, match_os, 0.05 )
+
+        model.add_transition( match, match, 0.10 )
+        model.add_transition( match, model.end, 0.90 )
+
+        model.add_transition( match_os, match_os, 0.80 )
+        model.add_transition( match_os, model.end, 0.20 )
+        return model
+    
+    # Create the board object
+    board = HMMBoard( n=5, name=str(i) )
+    board.directions = ['>', '>', '<', '>', '<']
+
+    # Create the states in the model
+    delete = State( None, name="D:{}".format( name ) )
+    match = match_model( distribution, name=name )
+    insert = State( insert, name="I:{}".format( name ) )
+    match_s = State( distribution, name="MS:{}".format( name ) )
+    match_e = State( distribution, name="ME:{}".format( name ) )
+
+    # Add the match model
+    board.add_model( match )
+    
+    # Add all the individual states
+    board.add_states( [delete, insert, match_s, match_e] )
+
+    # Add all transitions from the ports to the states
+    board.add_transition( board.s1, delete, 1.00 )
+    board.add_transition( board.s2, match.start, 1.00 )
+    board.add_transition( board.e3, match_e, 1.00 )
+    board.add_transition( board.s4, match_s, 1.00 )
+    board.add_transition( board.e5, match.start, 0.90 )
+    board.add_transition( board.e5, match_e, 0.05 )
+    board.add_transition( board.e5, match.start, 0.05 )
+
+    board.add_transition( delete, board.e1, 0.1 )
+    board.add_transition( delete, insert, 0.1 )
+    board.add_transition( delete, board.e2, 0.8 )
+
+    board.add_transition( insert, match.start, 0.10 )
+    board.add_transition( insert, insert, 0.50 )
+    board.add_transition( insert, board.e1, 0.05 )
+    board.add_transition( insert, board.e2, 0.35 )
+
+    board.add_transition( match.end, insert, 0.01 )
+    board.add_transition( match.end, board.e1, 0.01 )
+    board.add_transition( match.end, board.e2, .97 )
+    board.add_transition( match.end, board.s5, .01 )
+
+    board.add_transition( match_s, board.s3, 0.80 )
+    board.add_transition( match_s, match_s, 0.20 )
+
+    board.add_transition( match_e, board.e2, 0.10 )
+    board.add_transition( match_e, match_e, 0.10 )
+    board.add_transition( match_e, board.e4, 0.80 )
+    return board
+
+######################################################
+# DEPRECATED MODELS                                  #
+# These models use the generative technique in order #
+# to build linear models. We are currently using the #
+# technique of defining the repeating subunit, and   #
+# then build it using a constructor.                 # 
+######################################################
 
 def Phi29ProfileHMM( distributions, name="Phi29 Profile HMM",low=0, high=90, 
 	sb_length=1, verbose=True, merge='all' ):
