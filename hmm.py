@@ -85,129 +85,6 @@ def ModularProfileModel( board_func, distributions, name, insert ):
 				n = len( distributions[i-1].keys() )
 
 				# Go through each of the previous boards
-				for last_board in boards[-n-1:]:
-					for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
-						# Get the appropriate end and start port
-						end = getattr( last_board, 'e{}'.format( j ) )
-						start = getattr( board, 's{}'.format( j ) )
-
-						# Give appropriate transitions given the direction
-						if d == '>':
-							model.add_transition( end, start, 1.00 )
-						elif d == '<':
-							model.add_transition( start, end, 1.00 / n )
-
-				# Add the board to the growing list
-				boards.append( board )
-
-		# If we're currently in a fork..
-		elif isinstance( distribution, dict ):
-			# Calculate the number of paths in this fork
-			n = len( distribution.keys() )
-
-			# For each path in the fork, attach the boards appropriately
-			for key, dist in distribution.items():
-				board = board_func( dist, "{}:{}".format( key, i+1 ), insert=insert )
-				boards.append( board )
-				model.add_model( board )
-
-				# If the last position was in a fork as well..
-				if isinstance( distributions[i-1], dict ):
-					last_board = boards[-n-1]
-
-					# Connect the ports appropriately
-					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
-						end = getattr( last_board, 'e{}'.format( j ) )
-						start = getattr( board, 's{}'.format( j ) )
-
-						if d == '>':
-							model.add_transition( end, start, 1.00 )
-						elif d == '<':
-							model.add_transition( start, end, 1.00 )
-
-				# If the last position was not in a fork, then we need to fork the
-				# transitions appropriately
-				else:
-					# Go through each of the ports and give appropriate transition
-					# probabilities. 
-					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
-						# Get the start and end states
-						end = getattr( last_board, 'e{}'.format( j ) )
-						start = getattr( board, 's{}'.format( j ) )
-
-						# Give a transition in the appropriate direction.
-						if d == '>':
-							model.add_transition( end, start, 1.00 / n )
-						elif d == '<':
-							model.add_transition( start, end, 1.00 )
-
-	board = boards[0]
-	initial_insert = State( insert, name="I:0" )
-	model.add_state( initial_insert )
-
-	model.add_transition( initial_insert, initial_insert, 0.70 )
-	model.add_transition( initial_insert, board.s1, 0.1 )
-	model.add_transition( initial_insert, board.s2, 0.2 )
-
-	model.add_transition( model.start, initial_insert, 0.02 )
-	model.add_transition( model.start, board.s1, 0.08 )
-	model.add_transition( model.start, board.s2, 0.90 )
-
-	board = boards[-1]
-	model.add_transition( board.e1, model.end, 1.00 )
-	model.add_transition( board.e2, model.end, 1.00 )
-
-	model.bake()
-	return modeldef ModularProfileModel( board_func, distributions, name, insert=UniformDistribution( 0, 90 ) ):
-	"""
-	Create the HMM using circuit board methodologies.
-	"""
-
-	# Initialize the model, and the list of boards in the model
-	model = Model( name )
-	boards = []
-
-	# For each distribution in the list, add it to the model
-	for i, distribution in enumerate( distributions ):
-		# If this is not the first distribution, then pull the last board to connect to
-		if i > 0:
-			last_board = boards[-1]
-
-		# If the current distribution is a distribution and not a dictionary..
-		if isinstance( distribution, Distribution ):
-			# Build a board for that distribution and add it to the model
-			board = board_func( distribution, name=i+1, insert=insert )
-			model.add_model( board )
-
-			# If this is the first board, there are no boards to connect to
-			if i == 0:
-				boards.append( board )
-				continue
-
-			# If the last board is a single distribution, simply connect to it
-			if isinstance( distributions[i-1], Distribution ):
-				# Add the current board to the list of boards
-				boards.append( board )
-
-				# Iterate across all the ports on the board
-				for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
-					# Get the end port from the last board and the start port from this board
-					end = getattr( last_board, 'e{}'.format( j ) )
-					start = getattr( board, 's{}'.format( j ) )
-
-					# Depending on the direction of that port, connect it in the appropriate
-					# direction.
-					if d == '>':
-						model.add_transition( end, start, 1.00 )
-					elif d == '<':
-						model.add_transition( start, end, 1.00 )
-
-			# If the last distribution was actually a dictionary, then we're remerging from a fork.
-			elif isinstance( distributions[i-1], dict ):
-				# Calculate the number of forks in there
-				n = len( distributions[i-1].keys() )
-
-				# Go through each of the previous boards
 				for last_board in boards[-n:]:
 					for j, d in it.izip( xrange( 1,board.n+1 ), board.directions ):
 						# Get the appropriate end and start port
@@ -237,6 +114,7 @@ def ModularProfileModel( board_func, distributions, name, insert ):
 				# If the last position was in a fork as well..
 				if isinstance( distributions[i-1], dict ):
 					last_board = boards[-n-1]
+
 					# Connect the ports appropriately
 					for j, d in it.izip( xrange( 1, board.n+1 ), board.directions ):
 						end = getattr( last_board, 'e{}'.format( j ) )
@@ -278,6 +156,7 @@ def ModularProfileModel( board_func, distributions, name, insert ):
 	board = boards[-1]
 	model.add_transition( board.e1, model.end, 1.00 )
 	model.add_transition( board.e2, model.end, 1.00 )
+
 	model.bake()
 	return model
 
@@ -393,7 +272,7 @@ def Phi29GlobalAlignmentModule( distribution, name, insert=UniformDistribution( 
         return model
     
     # Create the board object
-    board = HMMBoard( n=5, name=str(i) )
+    board = HMMBoard( n=5, name=str(name) )
     board.directions = ['>', '>', '<', '>', '<']
 
     # Create the states in the model
