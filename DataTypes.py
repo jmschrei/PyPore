@@ -172,7 +172,7 @@ class Event( Segment ):
 
         return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
 
-    def plot( self, hmm=None, cmap="Set1", color_cycle=['r', 'b', '#FF6600', 'g'], **kwargs ):
+    def plot( self, hmm=None, cmap="Set1", algorithm='viterbi', color_cycle=['r', 'b', '#FF6600', 'g'], hidden_states=None, **kwargs ):
         '''
         Plot the segments, colored either according to a color cycle, or according to the colors
         associated with the hidden states of a specific hmm passed in. Accepts all arguments that
@@ -180,7 +180,8 @@ class Event( Segment ):
         '''
 
         if hmm:
-            _, hidden_states = self.apply_hmm( hmm )
+            if not hidden_states:
+                _, hidden_states = self.apply_hmm( hmm, algorithm )
             hidden_states = filter( lambda state: not state[1].is_silent(), hidden_states )
             
             if isinstance( cmap, dict ):
@@ -200,7 +201,7 @@ class Event( Segment ):
                     # If using the naming scheme of "X..." meaning a single character
                     # to indicate state type, then an integer, then parse using that.
                     # Ex: U1, U15, I17, M201, M2...
-                    n = float( hmm.name.split('-')[1] )-1
+                    n = float( hmm.name.split('-')[1] )
                     hmm_color_cycle = []
 
                     for i, state in hidden_states:
