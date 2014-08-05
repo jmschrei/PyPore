@@ -145,7 +145,7 @@ The last core functionality is the ability to apply an hidden markov model (HMM)
 
 ```
 from PyPore.DataTypes import *
-from PyPore.hmm import Bifurcator
+from PyPore.hmm import tRNAbasic
 from matplotlib import pyplot as plt
 
 file = File( "My_File.abf" )
@@ -242,13 +242,11 @@ These parsers were intended to be use for event detection. They include:
 
 # HMMs
 
-### Making HMMs
+### Making Hidden Markov Models
 
-You should use the yahmm package to make a HMM. This has been sped up both by hacking the code a little, and by converting it from python to cython, leading to a speed up on the viterbi path of approximately 1000x versus the pure python implementation. The original yahmm package was written by Adam Novak, and he includes amazing documenation at the beginning about how to use it properly. I'll run through it simply:
+PyPore is set up to accept <a href="https://www.github.com/jmschrei/yahmm">YAHMM</a> hidden Markov models by default. The YAHMM package is a general HMM package, which is written in Cython for speed. The original yahmm package was written by Adam Novak, but has been converted to Cython and expanded upon by myself. Here is an example of making a model:
 
 ```
-import pyximport
-pyximport.install( setup_args={'include_dirs':np.get_include()} )
 from yahmm import *
 
 model = Model( "happy model" )
@@ -345,6 +343,7 @@ file.to_json( filename="My_File.json" )
 
 The representation of your analysis will then be available as a human-readable json format. It may not be particularly fun to look at, but you will be able to read the metadata from the file. A snippet from an example file looks like the following:
 
+```
 {
      "name" : "File",
      "n" : 16,
@@ -389,7 +388,7 @@ The representation of your analysis will then be available as a human-readable j
                      "duration" : 2.49605,
                      "mean" : 24.084380592526145
                 ....
-
+```
 The file continues to list every event, and every segment in every event. The code to reconstruct an analysis from a json file is just as long as the code to reconstruct from the database.
 
 ```
