@@ -46,6 +46,198 @@ from itertools import chain, izip, tee, combinations
 import itertools as it
 import re
 
+class MetaEvent( MetaSegment ):
+    '''
+    A container for metadata about an event, which is a portion of the file containing
+    useful data.
+    '''
+
+    def __init__( self, **kwargs ):
+        '''
+        Just pass all the arguments to a MetaSegment.
+        '''
+
+        MetaSegment.__init__( self, **kwargs )
+
+    def apply_hmm( self, hmm, algorithm='viterbi' ):
+        '''
+        Apply a hmm to the segments, returning the log probability and the state
+        sequence. Only uses the means of the segments currently. 
+        '''
+
+        return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
+
+    def delete( self ):
+        '''
+        Delete all data associated with itself, including making the call on all segments if they
+        exist, ensuring that all references get removed immediately.
+        '''
+
+        with ignored( AttributeError ):
+            del self.state_parser
+        for segment in self.segments:
+            segment.delete()
+        del self
+
+    def plot( self, hmm=None, cmap="Set1", algorithm='viterbi', color_cycle=['r', 'b', '#FF6600', 'g'], hidden_states=None, **kwargs ):
+        '''
+        Plot the segments, colored either according to a color cycle, or according to the colors
+        associated with the hidden states of a specific hmm passed in. Accepts all arguments that
+        pyplot.plot accepts, and passes them along.
+        '''
+
+        if hmm:
+            if not hidden_states:
+                _, hidden_states = self.apply_hmm( hmm, algorithm )
+            hidden_states = filter( lambda state: not state[1].is_silent(), hidden_states )
+            
+            if isinstance( cmap, dict ):
+                # If you pass in a custom coloring scheme, use that.
+                hmm_color_cycle = []
+                for _, state in hidden_states:
+                    if state.name in cmap.keys():
+                        hmm_color_cycle.append( cmap[state.name] )
+                    elif 'else' in cmap.keys():
+                        hmm_color_cycle.append( cmap['else'] )
+                    else:
+                        hmm_color_cycle.append( 'k' )
+            else:
+                cm = plt.get_cmap( cmap )
+
+                try:
+                    # If using the naming scheme of "X..." meaning a single character
+                    # to indicate state type, then an integer, then parse using that.
+                    # Ex: U1, U15, I17, M201, M2...
+                    n = float( hmm.name.split('-')[1] )
+                    hmm_color_cycle = []
+
+                    for i, state in hidden_states:
+                        if state.name[0] == 'U':
+                            hmm_color_cycle.append( 'r' )
+                        elif state.name[0] == 'I':
+                            hmm_color_cycle.append( 'k' )
+                        else:
+                            idx = float( re.sub( "[^0-9]", "", state.name ) ) / n
+                            hmm_color_cycle.append( cm( idx ) )
+
+                except:
+                    # If using any other naming scheme, assign a color from the colormap
+                    # to each state without any ordering, since none was specified.
+                    states = { hmm.states[i]: i for i in xrange( len(hmm.states) ) }
+                    hmm_color_cycle = [ cm( states[state] ) for i, state in hidden_states ]
+
+        if 'color' in kwargs.keys(): # If the user has specified a scheme..
+            color_arg = kwargs['color'] # Pull out the coloring scheme..
+            
+            if color_arg == 'cycle': # Use a 4-color rotating cycle
+                color = [ color_cycle[i%4] for i in xrange(self.n) ]
+
+            elif color_arg == 'hmm': # coloring by HMM hidden state
+                color = hmm_color_cycle
+
+            elif color_arg == 'model': # Color by the models in the HMM 
+                color, labels, i, new_model = [], [], 0, False
+                cycle = [ 'b', 'r', 'c', 'k', 'y', 'm', '0.25', 'g', '0.75' ] 
+                for index, state in hidden_states:
+                    if not state.is_silent():
+                        color.append( cycle[i%9] )
+                        if not new_model:
+                            labels.append( None )
+                        new_model = False
+                    elif state.name.endswith( "-start" ):
+                        labels.append( state.name[:-6] )
+                        new_model = True
+                        i += 1
+            else:
+                color = kwargs['color']
+
+            del kwargs['color']
+        else:
+            color, color_arg = 'k', 'k'
+
+        # Set appropriate labels 
+        if 'label' in kwargs.keys():
+            if isinstance( label, str ):
+                labels = [ kwargs['label'] ]
+            else:
+                labels = kwargs['label']
+        elif color_arg != 'model':
+            labels = []
+
+        if self.n == 0:
+            x = ( 0, self.duration )
+            y_high = lambda z: self.mean + z * self.std
+            y_low = lambda z: self.mean - z * self.std
+            plt.plot( x, ( self.mean, self.mean ), color=color, **kwargs )
+            plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.80 )
+            plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.30 )
+            plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.15 )
+        else:
+            for c, segment, l in it.izip_longest( color, self.segments, labels ):
+                x = ( segment.start, segment.duration+segment.start )
+                y_high = lambda z: segment.mean + z * segment.std
+                y_low = lambda z: segment.mean - z * segment.std
+                plt.plot( x, (segment.mean, segment.mean), color=c, label=l, **kwargs )
+                plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.80 )
+                plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
+                plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
+
+        if len(labels) > 0:
+            plt.legend()
+        try:
+            plt.title( "MetaEvent at {} at {}s".format( self.file.filename, self.start ) )
+        except:
+            plt.title( "MetaEvent at {}s".format( self.start ))
+
+        plt.xlabel( "Time (s)" )
+        plt.ylabel( "Current (pA)" )
+
+        plt.ylim( self.min - 5, self.max  )
+        plt.xlim( 0, self.duration )
+
+    def to_dict( self ):
+        keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration', 
+                'filter_order', 'filter_cutoff', 'n', 'state_parser', 'segments' ]
+        d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
+        d['name'] = self.__class__.__name__
+        return d
+
+    def to_json( self, filename=None ):
+        d = self.to_dict()
+
+        with ignored( KeyError, AttributeError ):
+            d['segments'] = [ seg.to_dict() for seg in d['segments'] ]
+
+        with ignored( KeyError, AttributeError ):
+            d['state_parser'] = d['state_parser'].to_dict()
+
+        _json = json.dumps( d, indent=4, separators=( ',', ' : ' ) )
+        if filename:
+            with open( filename, 'w' ) as out:
+                out.write( _json )
+        return _json
+
+    @classmethod
+    def from_json( cls, _json ) :
+        if _json.endswith( ".json" ):
+            with open( _json, 'r' ) as infile:
+                _json = ''.join(line for line in infile)
+
+        d = json.loads( _json )
+        return cls( **d )
+
+    @classmethod
+    def from_segments( cls, segments ):
+        return cls( segments=segments )
+
+    @property
+    def n( self ):
+        try:
+            return len( self.segments )
+        except:
+            return 0
+
+
 class Event( Segment ):
     '''
     A container for the ionic current corresponding to an 'event', which means a portion of the 
@@ -96,10 +288,6 @@ class Event( Segment ):
         which yield the same state in the hmm. If no hmm is given, returns the raw parser
         segmentation.
         '''
-
-        # Ensure that a MetaEvent has not been falsely assigned the tag Event
-        if type(self) is not Event:
-            raise TypeError( "Cannot parse a metaevent. Must have the current." )
 
         self.segments = np.array( [ Segment( current=segment.current, 
             start=segment.start / self.second, second=self.second, event=self,
@@ -258,30 +446,12 @@ class Event( Segment ):
             labels = []
 
         if isinstance( color, str ):
-            if self.__class__.__name__ == "MetaEvent":
-                x = ( 0, self.duration )
-                y_high = lambda z: self.mean + z * self.std
-                y_low = lambda z: self.mean - z * self.std
-                plt.plot( x, ( self.mean, self.mean ), color=color, **kwargs )
-                plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.80 )
-                plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.30 )
-                plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.15 )
-            else:
-                plt.plot( np.arange(0, len( self.current ) )/self.second, 
-                    self.current, color=color, **kwargs )
+            plt.plot( np.arange(0, len( self.current ) )/self.second, 
+                self.current, color=color, **kwargs )
         else:
             for c, segment, l in it.izip_longest( color, self.segments, labels ):
-                if self.__class__.__name__ == "MetaEvent":
-                    x = ( segment.start, segment.duration+segment.start )
-                    y_high = lambda z: segment.mean + z * segment.std
-                    y_low = lambda z: segment.mean - z * segment.std
-                    plt.plot( x, (segment.mean, segment.mean), color=c, label=l, **kwargs )
-                    plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.80 )
-                    plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
-                    plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
-                else:
-                    plt.plot( np.arange(0, len( segment.current ) )/self.second + segment.start, 
-                        segment.current, color=c, label=l, **kwargs )
+                plt.plot( np.arange(0, len( segment.current ) )/self.second + segment.start, 
+                    segment.current, color=c, label=l, **kwargs )
 
         if len(labels) > 0:
             plt.legend()
@@ -292,6 +462,7 @@ class Event( Segment ):
 
         plt.xlabel( "Time (s)" )
         plt.ylabel( "Current (pA)" )
+
         plt.ylim( self.min - 5, self.max  )
         plt.xlim( 0, self.duration )
 
@@ -306,7 +477,7 @@ class Event( Segment ):
         for segment in self.segments:
             segment.to_meta()
 
-        self.__class__ = type( "MetaEvent", (Event,), self.__dict__ )
+        self.__class__ = type( "MetaEvent", ( MetaEvent, ), self.__dict__ )
 
     def to_dict( self ):
         keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration', 'filtered', 
@@ -340,7 +511,7 @@ class Event( Segment ):
 
         event = MetaSegment() 
         if 'current' not in d.keys():
-            event.__class__ = type("MetaEvent", (MetaSegment,), d )
+            event.__class__ = type("MetaEvent", (MetaEvent, ), d )
         else:
             event = cls( d['current'], d['start'], )
 
@@ -387,9 +558,17 @@ class File( Segment ):
     A container for the raw ionic current pulled from a .abf file, and metadata as to
     the events detected in the file. 
     '''
-    def __init__( self, filename, **kwargs ):
-        timestep, current = read_abf( filename )
-        filename = filename.split("\\")[-1].split(".abf")[0]
+    def __init__( self, filename=None, current=None, timestep=None, **kwargs ):
+        # Must either provide the current and timestep, or the filename
+        if current is not None and timestep is not None:
+            filename = ""
+        elif filename and current is None and timestep is None:
+            timestep, current = read_abf( filename )
+            filename = filename.split("\\")[-1].split(".abf")[0]
+        else:
+            raise SyntaxError( "Must provide current and timestep, or filename \
+                corresponding to a valid abf file." )
+
         Segment.__init__( self, current=current, filename=filename, second=1000./timestep, 
                                 events=[], sample=None )
 
@@ -399,8 +578,7 @@ class File( Segment ):
     def parse( self, parser = lambda_event_parser( threshold=90 ), delete_current=False ):
         '''
         Applies one of the plug-n-play event parsers for event detection. The parser must have a .parse method
-        which returns a tuple corresponding to the 
-        self.start = startg to the start of each event, and the ionic current in them. 
+        which returns a tuple corresponding to the start of each event, and the ionic current in them. 
         '''
         
         self.events = [ Event( current=seg.current, start=seg.start, file=self ) 
@@ -501,8 +679,6 @@ class File( Segment ):
         for event in self.events:
             event.to_meta()
 
-        self.__class__ = type( "MetaFile", (File,), self.__dict__ )
-
     def to_dict( self ):
         '''
         Return a dictionary of the important data that underlies this file. This is done with the
@@ -562,21 +738,39 @@ class File( Segment ):
         if d['name'] != "File":
             raise TypeError( "JSON does not encode a file" )
 
-        file = File( d['filename']+".abf" )
+        try:
+            file = File( filename=d['filename']+".abf" )
+            meta = False
+        except:
+            file = File( current=[], timestep=1 )
+            meta = True
+
         file.event_parser = parser.from_json( json.dumps(d['event_parser']) )
         file.events = []
 
         for _json in d['events']:
             s, e = int(_json['start']*file.second), int(_json['end']*file.second)
 
-            event = Event( current=file.current[ s:e ], start=s, file=file )
+            if meta:
+                event = MetaEvent( **_json )
+            else:
+                current = file.current[ s:e ]
+                event = Event( current=current, start=s, file=file )
 
             if _json['filtered']:
-                event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
+                if not meta:
+                    event.filter( order=_json['filter_order'], cutoff=_json['filter_cutoff'] )
 
-            event.segments = [ Segment( current=event.current[ int(s_json['start']*file.second) : int(s_json['end']*file.second) ],
-                                        second=file.second, event=event, start=s_json['start'] )
-                                                                for s_json in _json['segments'] ]
+            if meta:
+                event.segments = [ MetaSegment( **s_json ) for s_json in _json['segments'] ]
+            else:
+                event.segments = [ Segment( current=event.current[ int(s_json['start']*file.second):
+                                                                   int(s_json['end']*file.second) ],
+                                            second=file.second, 
+                                            event=event, 
+                                            start=s_json['start'] )
+                                    for s_json in _json['segments'] ]
+
             event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
             event.filtered = _json['filtered']
             file.events.append( event )
@@ -723,7 +917,7 @@ class File( Segment ):
         return len( self.events )
 
 
-class Experiment( Container ):
+class Experiment( object ):
     '''
     An experiment represents a series of files which all are to be analyzed together, and have
     their results bundled. This may be many files run on the same nanopore experiment, or the
@@ -732,21 +926,46 @@ class Experiment( Container ):
     simply applying these functions over multiple files.
     '''
 
-    def __init__( self, samples=[], files=[], events=[], segments=[] ):
-        Container.__init__( self, samples=samples, files=files, events=events, 
-                            segments=segments, event_count=len(events) )
-
-    def parse( self, parser=lambda_event_parser( threshold=90 ) ):
+    def __init__( self, filenames, name=None ):
         '''
-        The same interface as the file parsing method. Does not parse events; returns parsed
-        file objects, the same way that file.parse returns events.  
+        Take in the filenames and store them for later analysis
         '''
 
-        for file in self.files:
-            file.parse( parser=parser )
-            self.event_count += file.n
-            self.add( file.events )
-            self.add( file.segments )
+        self.filenames = filenames
+        self.name = name or "Experiment"
+
+    def parse( self, event_detector=lambda_event_parser( threshold=90 ), 
+        segmenter=SpeedyStatSplit( prior_segments_per_second=10, cutoff_freq=2000. ),
+        filter_params=(1,2000),
+        verbose=True, meta=False  ):
+        '''
+        Go through each of the files and parse them appropriately. If the segmenter
+        is set to None, then do not segment the events. If you want to filter the
+        events, pass in filter params of (order, cutoff), otherwise None.
+        '''
+
+        # Go through each file one at a time as a generator to ensure many files
+        # are not open at the same time.
+        for file in it.imap( File, self.filenames ):
+            if verbose:
+                print "Opening {}".format( file.filename )
+
+            file.parse( parser=event_detector )
+
+            if verbose:
+                print "\tDetected {} Events".format( file.n )
+            
+            # If using a segmenter, then segment all of the events in this file
+            for i, event in enumerate( file.events ):
+                if filter_params is not None:
+                    event.filter( *filter_params )
+                if segmenter is not None:
+                    event.parse( parser=segmenter )
+                    if verbose:
+                        print "\t\tEvent {} has {} segments".format( i+1, event.n )
+
+            if meta:
+                file.to_meta()
 
     def apply_hmm( self, hmm, filter=None, indices=None ):
         segments = []
@@ -785,91 +1004,3 @@ class Sample( Container ):
         del self.events
         del self.files
         del self
-
-def flatten( listOfLists ):
-    return chain.from_iterable( listOfLists )
-
-def pairwise( iterable ):
-    a, b = tee( iterable )
-    next(b, None)
-    return izip( a, b )
-
-def split_on_neg_dur( segments ):
-    start=0
-    for stop,seg in enumerate(segments):
-        if seg[1]>=0: continue
-        if stop>start: yield segments[start:stop]
-        start=stop+1
-    if segments[-1][1]>=0: yield segments[start:]
-
-class MultipleEventAlignment( object ):
-    '''
-    This object takes in multiple events, which are made up of segments, and allows for
-    methods that align the data in various ways. The two strategies are one-vs-all, if a model
-    is selected, or all-vs-all with neighbor joining to prune the graph.
-    '''
-    def __init__( self, events ):
-        self.events = events[:-1]
-        self.aligned_events = []
-        self.n = len(self.events)
-        self.pairwise = np.zeros( (self.n, self.n) )
-        self.score = 0
-
-    def align( self, strategy, model_id=None, skip=0.01, backslip=0.1 ):
-        if strategy == 'one-vs-all':
-            assert model_id is not None
-            self._one_vs_all( model_id=model_id, skip=skip, backslip=backslip )
-        elif strategy == 'all-vs-all':
-            self._all_vs_all()
-        else:
-            raise AttributeError( "alignment_type must be one-vs-all or all-vs-all." )
-
-    def _one_vs_all( self, model_id, skip, backslip ):
-        get = lambda attr: lambda event: np.array([getattr( seg, attr ) for seg in event.segments])
-        model = self.events[model_id]
-        aligner = SegmentAligner( get( 'mean' )( model ),
-                                  get( 'std' )( model ),
-                                  get( 'duration' )( model ),
-                                  skip_penalty=skip, backslip_penalty=backslip )
-        self.aligned_events = []
-        self.model_id = model_id
-        for i, event in enumerate( self.events ):
-            if i == model_id:
-                continue
-            self.pairwise[i][model_id], order = aligner.align( event )
-            aligned_event = aligner.transform( event, order )
-            if aligned_event:
-                self.aligned_events.append( aligned_event )
-        self.score = np.sum( self.pairwise ) / i
-
-    def _all_vs_all( self, skip, backslip ):
-        get = lambda attr: lambda event: np.array([getattr( seg, attr ) for seg in event.segments])
-        for i, model in enumerate( self.events ):
-            aligner = SegmentAligner( get( 'mean' )( model ),
-                                      get( 'std' )( model ),
-                                      get( 'duration' )( model ),
-                                       skip_penalty=skip, backslip_penalty=backslip )
-            for j, event in enumerate( self.events ):
-                if i == j:
-                    continue
-                self.pairwise[i][j] = self.pairwise[j][i] = aligner.align( event )
-        self.score = np.sum( self.pairwise ) / np.prod( self.pairwise.shape )
-
-    def plot( self ):
-        for i, event in enumerate( self.aligned_events ):
-            for segments in split_on_neg_dur( event ):
-                time = [ seg[0] for seg in segments ] + [ segments[-1][0] + segments[-1][1] ]
-                time_steps = [ t for t in flatten( pairwise( time ) ) ]
-                seg_values = [ v for v in flatten( (seg[2], seg[3] ) for seg in segments ) ]
-                plt.plot( time_steps, seg_values, color='rgbmyk'[i%6], linewidth=2, alpha=0.5 )
-        
-        model = self.events[self.model_id]
-        time = [ seg.start for seg in model.segments ] + [ model.segments[-1].start + model.segments[-1].duration ]
-        time_steps = [ t for t in flatten(pairwise(time))]
-        seg_values = [ v for v in flatten( (seg.mean, seg.mean) for seg in model.segments ) ]
-        plt.plot( time_steps, seg_values, color='c', linewidth=5, alpha=0.4 )
-        
-        plt.xlim(0,model.duration)
-        plt.ylabel("Current (pA)")
-        plt.xlabel("Time (s)")
-        plt.title("Alignment Plot")

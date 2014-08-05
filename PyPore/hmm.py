@@ -295,7 +295,7 @@ def Phi29GlobalAlignmentModule( distribution, name, insert=UniformDistribution( 
     board.add_transition( board.s4, match_s, 1.00 )
     board.add_transition( board.e5, match.start, 0.90 )
     board.add_transition( board.e5, match_e, 0.05 )
-    board.add_transition( board.e5, match.start, 0.05 )
+    board.add_transition( board.e5, board.s5, 0.05 )
 
     board.add_transition( delete, board.e1, 0.1 )
     board.add_transition( delete, insert, 0.1 )

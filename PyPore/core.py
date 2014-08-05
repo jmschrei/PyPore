@@ -18,7 +18,8 @@ class MetaSegment( object ):
 	'''
 	def __init__( self, **kwargs ):
 		for key, value in kwargs.iteritems():
-			setattr( self, key, value )
+			with ignored( AttributeError ):
+				setattr( self, key, value )
 
 		if hasattr( self, "current" ):
 			self.n = len( self.current )
@@ -60,7 +61,6 @@ class MetaSegment( object ):
 				outfile.write( _json )
 		return _json
 
-
 	@classmethod
 	def from_json( self, filename=None, json=None ):
 		assert filename or json and not (filename and json)
@@ -92,7 +92,8 @@ class Segment( object ):
 		for key, value in kwargs.iteritems():
 			if hasattr( self, key ):
 				continue
-			setattr( self, key, value )
+			with ignored( AttributeError ):
+				setattr( self, key, value )
 
 	def __repr__( self ):
 		return self.to_json()
