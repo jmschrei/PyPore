@@ -9,5 +9,4 @@ handling database requests, analyzing data, and visualizing it or retrieving
 it in an output.
 '''
 
-__version__ = '0.1.1'
-__phase__ = 'beta'
+__version__ = '0.2.0'

@@ -21,6 +21,8 @@ class MetaSegment( object ):
 			with ignored( AttributeError ):
 				setattr( self, key, value )
 
+		# If current is passed in, get metadata directly from it, then remove
+		# the reference to that array.
 		if hasattr( self, "current" ):
 			self.n = len( self.current )
 			self.mean = np.mean( self.current )
@@ -29,6 +31,7 @@ class MetaSegment( object ):
 			self.max = np.max( self.current )
 			del self.current
 
+		# Fill in start, end, and duration given that you only have two of them.
 		if hasattr( self, "start" ) and hasattr( self, "end" ) and not hasattr(self, "duration" ):
 			self.duration = self.end - self.start
 		elif hasattr( self, "start" ) and hasattr( self, "duration" ) and not hasattr(self, "end"):
@@ -37,24 +40,52 @@ class MetaSegment( object ):
 			self.start = self.end - self.duration
 
 	def __repr__( self ):
+		'''
+		The representation is a JSON.
+		'''
+
 		return self.to_json()
 
 	def __len__( self ):
+		'''
+		The length of the metasegment is the length of the ionic current it
+		is representing.
+		'''
+
 		return self.n
 
 	def delete( self ):
+		'''
+		Delete itself. There are no arrays with which to delete references for.
+		'''
+
 		del self
 
 	def to_meta( self ):
+		'''
+		Kept to allow for error handling, but since it's already a metasegment
+		it won't actually do anything.
+		'''
+
 		pass
 
 	def to_dict( self ):
+		'''
+		Return a dict representation of the metadata, usually used prior to
+		converting the dict to a JSON.
+		'''
+
 		keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration']
 		d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
 		d['name'] = self.__class__.__name__
 		return d
 
 	def to_json( self, filename=None ):
+		'''
+		Return a JSON representation of this, by reporting the important
+		metadata.
+		'''
+
 		_json = json.dumps( self.to_dict(), indent=4, separators=(',', ' : '))
 		if filename:
 			with open( filename, 'w' ) as outfile:
@@ -63,6 +94,12 @@ class MetaSegment( object ):
 
 	@classmethod
 	def from_json( self, filename=None, json=None ):
+		'''
+		Read in a metasegment from a JSON and return a metasegment object. 
+		Either pass in a file which has a segment stored, or an actual JSON 
+		object.
+		'''
+
 		assert filename or json and not (filename and json)
 		import re
 
@@ -89,6 +126,7 @@ class Segment( object ):
 		if already known. Cannot override statistical measurements. 
 		'''
 		self.current = current
+
 		for key, value in kwargs.iteritems():
 			if hasattr( self, key ):
 				continue
@@ -96,21 +134,38 @@ class Segment( object ):
 				setattr( self, key, value )
 
 	def __repr__( self ):
+		'''
+		The string representation of this object is the JSON.
+		'''
+
 		return self.to_json()
+
 	def __len__( self ):
+		'''
+		The length of a segment is the length of the underlying ionic current
+		array.
+		'''
+
 		return self.n
-	def __add__( self, otherSegment ):
-		if isinstance( otherSegment, Segment ):
-			return Segment( current=np.concatenate(( self.current, otherSegment.current )))
-		raise TypeError( "Cannot add type {type} to type Segment".format( type(otherSegment) ) )
+
 
 	def to_dict( self ):
+		'''
+		Return a dict representation of the metadata, usually used prior to
+		converting the dict to a JSON.
+		'''
+
 		keys = ['mean', 'std', 'min', 'max', 'start', 'end', 'duration']
 		d = { i: getattr( self, i ) for i in keys if hasattr( self, i ) }
 		d['name'] = self.__class__.__name__
 		return d
 
 	def to_json( self, filename=None ):
+		'''
+		Return a JSON representation of this, by reporting the important
+		metadata.
+		'''
+
 		_json = json.dumps( self.to_dict(), indent=4, separators=(',', ' : '))
 		if filename:
 			with open( filename, 'w' ) as outfile:
@@ -118,6 +173,11 @@ class Segment( object ):
 		return _json
 
 	def to_meta( self ):
+		'''
+		Convert from a segment to a 'metasegment', which stores only metadata
+		about the segment and not the full array of ionic current.
+		'''
+
 		for key in ['mean', 'std', 'min', 'max', 'end', 'start', 'duration']:
 			with ignored( KeyError, AttributeError ):
 				self.__dict__[ key ] = getattr( self, key )
@@ -126,8 +186,25 @@ class Segment( object ):
 		self.__class__  = type( "MetaSegment", ( MetaSegment, ), self.__dict__ )
 
 	def delete( self ):
+		'''
+		Deleting this segment requires deleting its reference to the ionic
+		current array, and then deleting itself. 
+		'''
+
 		with ignored( AttributeError ):
 			del self.current
+
+		del self
+
+	def scale( self, sampling_freq ):
+		'''
+		Rescale all of the values to go from samples to seconds.
+		'''
+
+		with ignored( AttributeError ):
+			self.start /= sampling_freq
+			self.end /= sampling_freq
+			self.duration /= sampling_freq
 
 	@property
 	def mean( self ):
@@ -142,15 +219,17 @@ class Segment( object ):
 	def max( self ):
 		return np.max( self.current )
 	@property
-	def end( self ):
-		return self.start + self.duration
-	@property
 	def n( self ):
 		return len( self.current )
 
 
 	@classmethod
 	def from_json( self, filename=None, json=None ):
+		'''
+		Read in a segment from a JSON and return a metasegment object. Either
+		pass in a file which has a segment stored, or an actual JSON object.
+		'''
+
 		assert filename or json and not (filename and json)
 		import re
 
@@ -168,69 +247,6 @@ class Segment( object ):
 		del attrs['current']
 		
 		return Segment( current, **attrs )
-
-class Container( object ):
-	'''
-	An abstract container for other objects. Built with the idea that it will store many types of
-	other objects, which are all stratified together. Add and get method built with the intention
-	of not needing to know what these object types are. 
-	'''
-	def __init__( self, **kwargs ):
-		for key, value in kwargs.iteritems():
-			if not hasattr( self, key ):
-				setattr( self, key, value )
-			else:
-				raise Exception()
-
-	def add( self, data ):
-		'''
-		Add an object type to an attribute which is the pluralized version of that type.
-		For example, adding an object of type "Event" will create, or append to, an
-		attribute named "events", accessible either by obj.events or by using the get
-		method. 
-		'''
-   		attr = "{}s".format( data.__class__.__name__.lower() )
-		if hasattr( self, attr ):
-			if type( getattr( self, attr ) ) not in ( np.array, list ):
-				setattr( self, attr, [ data ] )
-			else:
-				attr_data = getattr( self, attr )
-				setattr( self, attr, [ x for x in it.chain( attr_data, data ) ] )
-		else:
-			setattr( self, attr, np.array([ data ]) )
-
-	def get( self, attr, filter_attr=None, filter=None, indices=None ):
-		'''
-		Gets an object type, with a possible filter. This assumes that the attributes
-		are connected in a tree-like manner, such as filter_attr has an attribute named
-		attr, like filter_attr.attr leads to attr.For example, if both people and cities 
-		are attributes of this container, and cities also have a people attribute, such as
-		<city instance>.people, then you can use filter_attr and filter (or indices) to
-		indicate which cities you want to return the people for. 
-    	
-		Example usage:
-		import numpy as np
-		pop = 5
-		people = [ Person() for i in range( 100 )]
-		cities = [ City( people = people[i*pop:i*pop+pop] for i in range(int(100/pop)),
-						 happiness_index = np.random.rand(1) ) ] 
-		population_data = Container( people = people, cities = cities )
-		print population_data.get( "people", filter_attr="cities",
-									filter=lambda city: city.happiness_index > 1 )
-
-		'''
-		try:
-			if filter_attr:
-				return np.concatenate([ getattr( datum, attr ) for datum in \
-										self.get( filter_attr, filter=filter, indices=indices ) ])
-			elif filter:
-				return [ datum for datum in getattr( self, attr ) if filter( datum ) ]
-			elif indices:
-				return [ datum for i, datum in enumerate( getattr( self, attr ) ) if i in indices ]
-			else:
-				return getattr( self, attr )
-		except:
-			raise AttributeError( "Attribute {} does not exist.".format( attr ) )
 
 @contextmanager
 def ignored( *exceptions ):

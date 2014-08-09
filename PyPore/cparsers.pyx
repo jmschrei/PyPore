@@ -112,8 +112,8 @@ cdef class FastStatSplit:
 
 		breakpoints = self._recursive_split( 0, int(len(current)) )
 
-		segments = [ Segment( current=current[start:end], start=start, duration=(end-start) ) 
-			for start, end in pairwise( chain([0],breakpoints,[len(current)]) ) ]
+		segments = [ Segment( current=current[start:end], start=start, duration=(end-start),
+			end=end ) for start, end in pairwise( chain([0],breakpoints,[len(current)]) ) ]
 
 		return segments
 

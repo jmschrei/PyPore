@@ -244,23 +244,15 @@ class Event( Segment ):
     file containing useful data. 
     '''
 
-    def __init__( self, current, start=0, second=100000., file=None, segments=[], **kwargs ):
-        # If a file is provided, divide the time into seconds appropriately
-        if file is not None:
-            second = file.second
-            start /= file.second
-            duration = len(current) / file.second
-
+    def __init__( self, current, segments=[], **kwargs ):
         # If segments are provided, set an appropriate duration 
-        elif len(segments) > 0:
-            duration = sum( seg.duration for seg in segments )
+        if len(segments) > 0:
+            try:
+                current = np.concatenate( ( seg.current for seg in segments ) )
+            except:
+                current = []
 
-        else:
-            if 'duration' not in kwargs:
-                duration = len(current) / second
-
-        Segment.__init__( self, current, duration=duration, filtered=False, 
-            second=second, start=start, segments=segments, sample=None, file=file, **kwargs )            
+        Segment.__init__( self, current, filtered=False, segments=segments, **kwargs )            
 
          
     def filter( self, order=1, cutoff=2000. ):
@@ -279,7 +271,7 @@ class Event( Segment ):
         self.filter_order = order
         self.filter_cutoff = cutoff
 
-    def parse( self, parser=SpeedyStatSplit( min_gain_per_sample=0.3 ), hmm=None ):
+    def parse( self, parser=SpeedyStatSplit( prior_segments_per_second=10 ), hmm=None ):
         '''
         Ensure that the data is filtered according to a bessel filter, and then applies a 
         plug-n-play state parser which must contain a .parse method. If a hmm is given, it will
@@ -289,10 +281,10 @@ class Event( Segment ):
         segmentation.
         '''
 
-        self.segments = np.array( [ Segment( current=segment.current, 
-            start=segment.start / self.second, second=self.second, event=self,
-            duration=len(segment.current) / self.second ) 
-            for segment in parser.parse( self.current ) ] ) 
+        self.segments = parser.parse( self.current ) 
+        for segment in self.segments:
+            segment.event = self
+            segment.scale( float(self.file.second) )
 
         # If using HMM-Guided Segmentation, run the segments through the HMM
         if hmm:
@@ -360,7 +352,8 @@ class Event( Segment ):
 
         return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
 
-    def plot( self, hmm=None, cmap="Set1", algorithm='viterbi', color_cycle=['r', 'b', '#FF6600', 'g'], hidden_states=None, **kwargs ):
+    def plot( self, hmm=None, cmap="Set1", algorithm='viterbi', color_cycle=['r', 'b', '#FF6600', 'g'],
+        hidden_states=None, lines=False, linecolor='k', **kwargs ):
         '''
         Plot the segments, colored either according to a color cycle, or according to the colors
         associated with the hidden states of a specific hmm passed in. Accepts all arguments that
@@ -445,16 +438,32 @@ class Event( Segment ):
         elif color_arg != 'model':
             labels = []
 
+        # Actually do the plotting here
+        # If no segments, plot the entire event.
         if isinstance( color, str ):
             plt.plot( np.arange(0, len( self.current ) )/self.second, 
                 self.current, color=color, **kwargs )
+
+        # Otherwise plot them one segment at a time, colored appropriately.
         else:
             for c, segment, l in it.izip_longest( color, self.segments, labels ):
                 plt.plot( np.arange(0, len( segment.current ) )/self.second + segment.start, 
                     segment.current, color=c, label=l, **kwargs )
 
+                # If plotting the lines, plot the line through the means
+                if lines:
+                    plt.plot( [segment.start, segment.end], [segment.mean, segment.mean], c=linecolor )
+
+            # If plotting the lines, plot the transitions from one segment to another
+            if lines:
+                for seg, next_seg in it.izip( self.segments[:-1], self.segments[1:] ):
+                    plt.plot( [seg.end, seg.end], [ seg.mean, next_seg.mean ], c=linecolor )
+
+        # If labels have been passed in, then add the legend.
         if len(labels) > 0:
             plt.legend()
+
+        # Set the title to include filename and time, or just time.
         try:
             plt.title( "Event at {} at {}s".format( self.file.filename, self.start ) )
         except:
@@ -575,18 +584,20 @@ class File( Segment ):
     def __getitem__( self, index ):
         return self.events[ index ]
 
-    def parse( self, parser = lambda_event_parser( threshold=90 ), delete_current=False ):
+    def parse( self, parser = lambda_event_parser( threshold=90 ) ):
         '''
         Applies one of the plug-n-play event parsers for event detection. The parser must have a .parse method
         which returns a tuple corresponding to the start of each event, and the ionic current in them. 
         '''
         
-        self.events = [ Event( current=seg.current, start=seg.start, file=self ) 
-            for seg in parser.parse( self.current ) ]
+        self.events = [ Event( current=seg.current,
+                               start=seg.start / self.second,
+                               end=seg.end / self.second,
+                               duration=seg.duration / self.second,
+                               second=self.second,
+                               file=self ) for seg in parser.parse( self.current ) ]
+
         self.event_parser = parser
-        
-        if delete_current:    # Deletes the current array to save significant amounts of space.
-            del self.current  # Events hold a hard copy of a smaller array of current. 
 
     def close( self ):
         '''
@@ -626,12 +637,12 @@ class File( Segment ):
         second = self.second
 
         # Allows you to only plot a certain portion of the file
-        limits = limits or ( 0, len( self.current) )
+        limits = limits or ( 0, len( self.current) * step )
         start, end = limits
 
         # If you want to apply special settings to the events and the rest of the file
         # separately, you need to go through each part and plot it individually.
-        if color_events:
+        if color_events and self.n > 0:
             # Pick out all of the events, as opposed to non-event related current
             # in the file.
             events = [ event for event in self.events if event.start > start and event.end < end ]
@@ -755,7 +766,11 @@ class File( Segment ):
                 event = MetaEvent( **_json )
             else:
                 current = file.current[ s:e ]
-                event = Event( current=current, start=s, file=file )
+                event = Event( current=current, 
+                               start=s, 
+                               end=e, 
+                               duration=e-s, 
+                               file=file )
 
             if _json['filtered']:
                 if not meta:
@@ -768,7 +783,7 @@ class File( Segment ):
                                                                    int(s_json['end']*file.second) ],
                                             second=file.second, 
                                             event=event, 
-                                            start=s_json['start'] )
+                                            **s_json )
                                     for s_json in _json['segments'] ]
 
             event.state_parser = parser.from_json( json.dumps( _json['state_parser'] ) )
@@ -933,6 +948,7 @@ class Experiment( object ):
 
         self.filenames = filenames
         self.name = name or "Experiment"
+        self.files = []
 
     def parse( self, event_detector=lambda_event_parser( threshold=90 ), 
         segmenter=SpeedyStatSplit( prior_segments_per_second=10, cutoff_freq=2000. ),
@@ -966,6 +982,7 @@ class Experiment( object ):
 
             if meta:
                 file.to_meta()
+            self.files.append( file )
 
     def apply_hmm( self, hmm, filter=None, indices=None ):
         segments = []
@@ -985,9 +1002,13 @@ class Experiment( object ):
             sample.delete()
         for file in self.files:
             file.delete()
-        del self 
+        del self
+
+    @property
+    def n( self ):
+        return len( self.files )
  
-class Sample( Container ):
+class Sample( object ):
     '''A container for events all suggested to be from the same substrate.'''
     def __init__( self, label=None ):
         self.events = []
