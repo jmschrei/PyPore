@@ -207,9 +207,9 @@ class lambda_event_parser( parser ):
             self.rules.append( lambda event: event.min > float( self.minCurrentInput.text() ) )
         if self.timeInput.text() != '':
             if str( self.timeDirectionInput.currentText() ) == '<':
-                self.rules.append( lambda event: event.duration < float( self.timeInput.text() ) )
+                self.rules.append( lambda event: event.duration < float( self.timeInput.text() ) * 100000. )
             elif str( self.timeDirectionInput.currentText() ) == '>':
-                self.rules.append( lambda event: event.duration > float( self.timeInput.text() ) )
+                self.rules.append( lambda event: event.duration > float( self.timeInput.text() ) * 100000. )
         if self.rules == []:
             self.rules = None
 
@@ -256,6 +256,10 @@ class SpeedyStatSplit( parser ):
         grid.addWidget( Qt.QLabel( "Maximum Width (samples): " ), 1, 0, 1, 3 )
         grid.addWidget( Qt.QLabel( "Window Width (samples): " ), 2, 0, 1, 3 )
         grid.addWidget( Qt.QLabel( "Minimum Gain / Sample: " ), 3, 0, 1, 3 )
+        grid.addWidget( Qt.QLabel( "Cutoff Frequency: " ), 4, 0, 1, 3 )
+        grid.addWidget( Qt.QLabel( "Sampling Frequency: " ), 5, 0, 1, 3 )
+        grid.addWidget( Qt.QLabel( "Prior SPS: " ), 6, 0, 1, 3 )
+        grid.addWidget( Qt.QLabel( "FPS Threshold: " ), 7, 0, 1, 3 )
         
         self.minWidth = Qt.QLineEdit()
         self.minWidth.setText('1000')
@@ -264,22 +268,36 @@ class SpeedyStatSplit( parser ):
         self.windowWidth = Qt.QLineEdit('10000')
         self.windowWidth.setText('10000')
         self.minGain = Qt.QLineEdit()
-        self.minGain.setText('0.05')
+        self.minGain.setText('')
+        self.cutoff = Qt.QLineEdit()
+        self.cutoff.setText('2000')
+        self.sampling = Qt.QLineEdit()
+        self.sampling.setText('100000')
+        self.sps = Qt.QLineEdit()
+        self.sps.setText('10')
+        self.fps = Qt.QLineEdit()
+        self.fps.setText('')
 
         grid.addWidget( self.minWidth, 0, 3 )
         grid.addWidget( self.maxWidth, 1, 3 )
         grid.addWidget( self.windowWidth, 2, 3 )
         grid.addWidget( self.minGain, 3, 3 )
+        grid.addWidget( self.cutoff, 4, 3 )
+        grid.addWidget( self.sampling, 5, 3 )
+        grid.addWidget( self.sps, 6, 3 )
+        grid.addWidget( self.fps, 7, 3 )
         return grid
 
     def set_params( self ):
-        try:
-            self.min_width = int(self.minWidth.text())
-            self.max_width = int(self.maxWidth.text())
-            self.window_width = int(self.windowWidth.text())
-            self.min_gain_per_sample = float(self.minGain.text())
-        except:
-            pass
+        self.min_width = int(self.minWidth.text())
+        self.max_width = int(self.maxWidth.text())
+        self.window_width = int(self.windowWidth.text())
+        self.sampling_freq = float(self.sampling.text())
+        self.cutoff_freq = float(self.cutoff.text())
+
+        self.min_gain_per_sample = None if self.minGain.text() == '' else float( self.minGain.text() )
+        self.prior_segments_per_second = None if self.sps.text() == '' else float( self.sps.text() )
+        self.false_positive_rate = None if self.fps.text() == '' else float( self.fps.text() )
 
 class StatSplit( SpeedyStatSplit ):
     """

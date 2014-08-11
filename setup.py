@@ -1,7 +1,7 @@
 from distutils.core import setup
 
 setup(
-    name='PyPore',
+    name='pythonic-porin',
     version='0.1.0',
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',

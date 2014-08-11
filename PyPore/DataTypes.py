@@ -998,8 +998,6 @@ class Experiment( object ):
         with ignored( AttributeError ):
             del self.segments
 
-        for sample in self.samples:
-            sample.delete()
         for file in self.files:
             file.delete()
         del self
@@ -1007,12 +1005,36 @@ class Experiment( object ):
     @property
     def n( self ):
         return len( self.files )
+
+    @property
+    def events( self ):
+        '''
+        Return all the events in all files.
+        '''
+        
+        try:
+            return reduce( list.__add__, [ file.events for file in self.files ] )
+        except:
+            return []
+
+    @property
+    def segments( self ):
+        '''
+        Return all segments from all events in an unordered manner.
+        '''
+
+        try:
+            return reduce( list.__add__, [ event.segments for event in self.events ] )
+        except:
+            return []
+
+
  
 class Sample( object ):
     '''A container for events all suggested to be from the same substrate.'''
-    def __init__( self, label=None ):
-        self.events = []
-        self.files = [] 
+    def __init__( self, events=[], files=[], label=None ):
+        self.events = events
+        self.files = files
         self.label = label
 
     def delete( self ):
