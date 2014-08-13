@@ -3,7 +3,9 @@ setup.py
 PyPore\DataTypes.py
 PyPore\__init__.py
 PyPore\alignment.py
+PyPore\calignment.pyx
 PyPore\core.py
+PyPore\cparsers.pyx
 PyPore\database.py
 PyPore\hmm.py
 PyPore\parsers.py

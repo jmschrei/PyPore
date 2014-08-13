@@ -19,8 +19,8 @@ if use_cython:
     cmdclass.update({ 'build_ext': build_ext })
 else:
     ext_modules = [
-        Extension("PyPore.cparsers", [ "PyPore/cparsers.c" ], include_dirs=[np.get_include()] )
-        Extension("PyPore.calignment", [ "PyPore/calignment.c" ], include_dirs=[np.get_include()],
+        Extension("PyPore.cparsers", [ "PyPore/cparsers.c" ], include_dirs=[np.get_include()] ),
+        Extension("PyPore.calignment", [ "PyPore/calignment.c" ], include_dirs=[np.get_include()] )
     ]
 
 setup(
