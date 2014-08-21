@@ -169,18 +169,18 @@ class MetaEvent( MetaSegment ):
             y_high = lambda z: self.mean + z * self.std
             y_low = lambda z: self.mean - z * self.std
             plt.plot( x, ( self.mean, self.mean ), color=color, **kwargs )
-            plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=0.80 )
-            plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.30 )
-            plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.15 )
+            plt.fill_between( x, y_high(1), y_low(1), color=color, alpha=1.00 )
+            plt.fill_between( x, y_high(2), y_low(2), color=color, alpha=0.50 )
+            plt.fill_between( x, y_high(3), y_low(3), color=color, alpha=0.30 )
         else:
             for c, segment, l in it.izip_longest( color, self.segments, labels ):
                 x = ( segment.start, segment.duration+segment.start )
                 y_high = lambda z: segment.mean + z * segment.std
                 y_low = lambda z: segment.mean - z * segment.std
                 plt.plot( x, (segment.mean, segment.mean), color=c, label=l, **kwargs )
-                plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=0.80 )
-                plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.30 )
-                plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.15 )
+                plt.fill_between( x, y_high(1), y_low(1), color=c, alpha=1.00 )
+                plt.fill_between( x, y_high(2), y_low(2), color=c, alpha=0.50 )
+                plt.fill_between( x, y_high(3), y_low(3), color=c, alpha=0.30 )
 
         if len(labels) > 0:
             plt.legend()
@@ -265,11 +265,8 @@ class Event( Segment ):
             raise TypeError( "Cannot filter a metaevent. Must have the current." )
         from scipy import signal
 
-        try:
-            nyquist = self.second / 2.
-        except:
-            nyquist = self.file.second / 2.
-            
+        nyquist = self.second / 2.
+
         (b, a) = signal.bessel( order, cutoff / nyquist, btype='low', analog=0, output = 'ba' )
         self.current = signal.filtfilt( b, a, self.current )
         self.filtered = True
@@ -772,9 +769,10 @@ class File( Segment ):
             else:
                 current = file.current[ s:e ]
                 event = Event( current=current, 
-                               start=s, 
-                               end=e, 
-                               duration=e-s, 
+                               start=s / file.second, 
+                               end=e / file.second, 
+                               duration=(e-s) / file.second,
+                               second=file.second, 
                                file=file )
 
             if _json['filtered']:
