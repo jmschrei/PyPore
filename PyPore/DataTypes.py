@@ -264,7 +264,12 @@ class Event( Segment ):
         if type(self) != Event:
             raise TypeError( "Cannot filter a metaevent. Must have the current." )
         from scipy import signal
-        nyquist = self.second / 2.
+
+        try:
+            nyquist = self.second / 2.
+        except:
+            nyquist = self.file.second / 2.
+            
         (b, a) = signal.bessel( order, cutoff / nyquist, btype='low', analog=0, output = 'ba' )
         self.current = signal.filtfilt( b, a, self.current )
         self.filtered = True
@@ -353,7 +358,7 @@ class Event( Segment ):
         return getattr( hmm, algorithm )( np.array([ seg.mean for seg in self.segments ]) )
 
     def plot( self, hmm=None, cmap="Set1", algorithm='viterbi', color_cycle=['r', 'b', '#FF6600', 'g'],
-        hidden_states=None, lines=False, linecolor='k', **kwargs ):
+        hidden_states=None, lines=False, line_kwargs={ 'c': 'k' }, **kwargs ):
         '''
         Plot the segments, colored either according to a color cycle, or according to the colors
         associated with the hidden states of a specific hmm passed in. Accepts all arguments that
@@ -452,12 +457,12 @@ class Event( Segment ):
 
                 # If plotting the lines, plot the line through the means
                 if lines:
-                    plt.plot( [segment.start, segment.end], [segment.mean, segment.mean], c=linecolor )
+                    plt.plot( [segment.start, segment.end], [segment.mean, segment.mean], **line_kwargs )
 
             # If plotting the lines, plot the transitions from one segment to another
             if lines:
                 for seg, next_seg in it.izip( self.segments[:-1], self.segments[1:] ):
-                    plt.plot( [seg.end, seg.end], [ seg.mean, next_seg.mean ], c=linecolor )
+                    plt.plot( [seg.end, seg.end], [ seg.mean, next_seg.mean ], **line_kwargs )
 
         # If labels have been passed in, then add the legend.
         if len(labels) > 0:

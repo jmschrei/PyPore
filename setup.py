@@ -29,7 +29,7 @@ setup(
     author='Jacob Schreiber',
     author_email='jmschreiber91@gmail.com',
     packages=['PyPore'],
-    url='http://pypi.python.org/pypi/PyPore/',
+    url='http://pypi.python.org/pypi/pythonic-porin/',
     license='LICENSE.txt',
     description='Nanopore Data Analysis package. Provides tools for reading data,\
         performing event detection, segmentation, visualization, and analysis using\
