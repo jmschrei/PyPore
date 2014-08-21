@@ -130,7 +130,7 @@ class MetaEvent( MetaSegment ):
             color_arg = kwargs['color'] # Pull out the coloring scheme..
             
             if color_arg == 'cycle': # Use a 4-color rotating cycle
-                color = [ color_cycle[i%4] for i in xrange(self.n) ]
+                color = [ color_cycle[i%len(color_cycle)] for i in xrange(self.n) ]
 
             elif color_arg == 'hmm': # coloring by HMM hidden state
                 color = hmm_color_cycle
@@ -1030,8 +1030,6 @@ class Experiment( object ):
             return reduce( list.__add__, [ event.segments for event in self.events ] )
         except:
             return []
-
-
  
 class Sample( object ):
     '''A container for events all suggested to be from the same substrate.'''
