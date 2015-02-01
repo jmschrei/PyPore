@@ -594,7 +594,7 @@ class File( Segment ):
         
         self.events = [ Event( current=seg.current,
                                start=seg.start / self.second,
-                               end=seg.end / self.second,
+                               end=(seg.start+seg.duration) / self.second,
                                duration=seg.duration / self.second,
                                second=self.second,
                                file=self ) for seg in parser.parse( self.current ) ]

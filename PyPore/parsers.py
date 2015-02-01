@@ -150,7 +150,7 @@ class lambda_event_parser( parser ):
         tics = np.concatenate( ( [0], np.where(mask ==1)[0]+1, [current.shape[0]] ) )
         del mask
         events = [ Segment(current=np.array(current), copy=True, 
-                            start=tics[i], 
+                            start=tics[i],
                             duration=current.shape[0] ) for i, current in enumerate( np.split( current, tics[1:-1]) ) ]
         return [ event for event in self._lambda_select( events ) ]
     
